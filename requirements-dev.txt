@@ -1,0 +1,16 @@
+# Development and CI only — never installed into the image.
+#
+# Deliberately *not* hash-pinned, unlike requirements.txt: nothing here reaches
+# the deployed server, so the reproducibility argument that justifies the
+# generated lockfile does not apply. Exact versions still, so CI does not start
+# failing on a release nobody chose.
+
+pytest==9.1.1
+respx==0.23.1
+ruff==0.16.2
+
+# Regenerates requirements.txt with hashes — see README, section "Dependencies".
+pip-tools==7.6.0
+
+# Reports known CVEs against the pinned production set.
+pip-audit==2.9.0

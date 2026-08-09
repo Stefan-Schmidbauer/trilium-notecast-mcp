@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a commit SHA — a major tag can be repointed by whoever owns
+      # the repository, and this job holds contents: write.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Deliberately no `files:` — unlike the two plugin repos, this one ships
+      # no artefact. The plugins publish a Trilium import zip; this server is
+      # deployed as an image built by deploy.sh on the target's own Docker
+      # daemon, so there is nothing to attach that anyone would install.
+      #
+      # The release is here for the version number alone: a name to refer to in
+      # issues and docs, and the anchor deploy.sh turns into a readable image
+      # tag via `git describe` (see "Deployment" in the README) instead of a
+      # bare commit SHA nobody can place.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          generate_release_notes: true

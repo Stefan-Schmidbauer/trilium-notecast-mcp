@@ -1,0 +1,38 @@
+# Tool configuration only — this is not a packaged distribution. The server is
+# run as a script (stdio) or copied into an image (HTTP); there is nothing to
+# build or install from here.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# conftest.py must set the environment before importing server.py, so tests/
+# has to be importable as a plain directory rather than a package.
+pythonpath = ["tests", "."]
+filterwarnings = [
+    "error",
+    # pydantic-settings emits this while resolving FastMCP's own Settings model;
+    # it is not ours to fix and would otherwise fail every test under -W error.
+    "ignore::UserWarning:pydantic_settings.*",
+]
+
+[tool.ruff]
+line-length = 104
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "W",    # warnings
+    "I",    # import sorting
+    "B",    # bugbear — mutable defaults, silent except, loop-variable capture
+    "UP",   # pyupgrade
+    "S",    # bandit — the reason ruff is here rather than plain flake8
+]
+ignore = [
+    "S101",  # assert: the test suite is built on it
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures are imported for their side effect of being collected, and conftest
+# deliberately imports after mutating os.environ.
+"tests/*" = ["E402"]

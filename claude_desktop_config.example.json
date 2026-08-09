@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "trilium-notecast": {
+      "command": "/path/to/trilium-notecast-mcp/venv/bin/python",
+      "args": ["/path/to/trilium-notecast-mcp/server.py"],
+      "env": {
+        "TRILIUM_URL": "http://localhost:8080",
+        "TRILIUM_API_KEY": "your-etapi-token",
+        "TRILIUM_DEFAULT_PARENT": "root"
+      }
+    }
+  }
+}

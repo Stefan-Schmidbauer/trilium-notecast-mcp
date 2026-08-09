@@ -1,0 +1,31 @@
+# The build context is streamed to the remote daemon over SSH — keep it small.
+# Both spellings: the README says `venv`, but a local `.venv` is just as common
+# and a missed pattern streams the whole virtualenv across the wire.
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.md
+deploy.sh
+deploy/
+.git/
+.github/
+.gitignore
+# Development-only. requirements.txt is the one file the image needs — the
+# generated lockfile — so requirements.in and the dev set stay out.
+tests/
+tools/
+pyproject.toml
+requirements.in
+requirements-dev.txt
+claude_desktop_config.json
+claude_desktop_config.example.json
+# Secrets and per-machine config — mirrors .gitignore. Nothing here is COPYd
+# into the image, but the context is streamed to the remote daemon, so keep it out.
+.env
+.env.*
+deploy.env
+CLAUDE.md
+.claude/

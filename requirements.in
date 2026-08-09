@@ -1,0 +1,18 @@
+# Direct dependencies. `requirements.txt` is *generated* from this file, with
+# hashes, and is the file that gets installed — never edit it by hand.
+#
+#     pip-compile --generate-hashes requirements.in
+#
+# Why hashes and not just pins: deploy.sh builds on the *remote* Docker daemon,
+# from a context streamed over SSH, with no registry and no source checkout on
+# the server. Exact versions make two builds install the same version numbers;
+# hashes make them install the same bytes. Given that deploy path, the second is
+# the one worth having, and it is what `pip install --require-hashes` in the
+# Dockerfile enforces.
+#
+# Bumping a version is a deliberate step: edit here, re-run pip-compile, and
+# commit both files together — see README, section "Dependencies".
+
+mcp==1.28.1
+httpx==0.28.1
+uvicorn==0.51.0

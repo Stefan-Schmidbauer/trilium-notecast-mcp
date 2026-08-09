@@ -1,0 +1,22 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Real config and secrets — only the *.example files belong in git
+claude_desktop_config.json
+.env
+.env.*
+deploy.env
+!*.example
+
+# Local assistant context — machine- and author-specific, not part of the project
+CLAUDE.md
+.claude/
+
+# Build artefacts
+*.zip
+
+.DS_Store
