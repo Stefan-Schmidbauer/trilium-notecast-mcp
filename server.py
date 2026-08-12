@@ -8,6 +8,7 @@ import os
 import re
 import time
 from hmac import compare_digest
+from typing import TypedDict
 from urllib.parse import quote
 
 import httpx
@@ -428,7 +429,7 @@ def create_note(
         JSON with noteId, or a STOP notice if the type is unavailable/ambiguous.
     """
     fmt, mechanics, source_id = _fetch_type_definition(note_type)
-    if source_id is None:
+    if source_id is None or mechanics is None:
         return fmt  # loud do-not-guess / ambiguous notice — nothing created
     parent = parent_note_id or mechanics["parent"] or DEFAULT_PARENT
     body = {
@@ -699,7 +700,17 @@ def search_notes(query: str, limit: int = 20) -> str:
 
 _FORMAT_TOOLS = ("create_note", "update_note")
 _TYPE_BLOCK_TTL = 60.0
-_type_block_cache: dict[str, object] = {"text": None, "ts": 0.0}
+
+
+class _TypeBlockCache(TypedDict):
+    """Two values of different types in one dict — spelled out so the TTL
+    comparison below reads `ts` as a float rather than as a bare object."""
+
+    text: str | None
+    ts: float
+
+
+_type_block_cache: _TypeBlockCache = {"text": None, "ts": 0.0}
 _base_descriptions: dict[str, str] = {}
 
 _TOOL_WORKFLOW_HEADER = f"""# Notecast — Note Creation
@@ -733,7 +744,7 @@ def _build_type_block() -> str:
     """
     now = time.monotonic()
     cached = _type_block_cache["text"]
-    if isinstance(cached, str) and now - float(_type_block_cache["ts"]) < _TYPE_BLOCK_TTL:
+    if isinstance(cached, str) and now - _type_block_cache["ts"] < _TYPE_BLOCK_TTL:
         return cached
     try:
         all_notes, truncated = _type_notes()
