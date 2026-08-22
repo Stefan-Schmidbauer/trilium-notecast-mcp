@@ -7,7 +7,7 @@
 
 pytest==9.1.1
 respx==0.23.1
-ruff==0.16.2
+ruff==0.16.3
 
 # Regenerates requirements.txt with hashes — see README, section "Dependencies".
 # 7.6.1 is a floor, not just the current version: 7.6.0 imports
