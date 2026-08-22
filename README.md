@@ -554,7 +554,7 @@ this README makes:
 | `test_id_validation.py` | `_id()` guards the ETAPI path: no request is *sent* for an ID containing `..`, `?`, `#` or CRLF |
 | `test_type_resolution.py` | a type resolves to exactly one definition, or refuses loudly — and discovery does not fan out into a request per type |
 | `test_auth.py` | the bearer check rejects a missing, wrong, prefix-matching or non-UTF-8 header; HTTP mode refuses to start without a token unless the opt-out is set; `/healthz` answers with and without a configured token |
-| `test_tools.py` | the live format reaches `create_note` / `update_note` and does not compound across connections — the private-SDK-API guard |
+| `test_tools.py` | the live format reaches `create_note` / `update_note`, and the middleware really is in the request chain — verified end to end through a client session |
 | `test_attachments.py` | an image survives the roundtrip byte for byte, goes out as `application/octet-stream`, and gets the reference form its note's target type needs |
 
 One thing the mocks cannot pin is whether *Trilium* still accepts that binary
@@ -583,7 +583,7 @@ mismatch fails the build rather than shipping.
 
 | Package | Why it is pinned |
 |---|---|
-| `mcp` | The server reaches into SDK internals (`mcp._mcp_server.list_tools`, `mcp._tool_manager`) to inject the live note formats. Private API — it can change in any release, including a patch |
+| `mcp` | The SDK the whole tool surface is built on. The live-format injection is a `ServerMiddleware` on `tools/list` — supported API, but the shape of that payload is what the injection edits |
 | `httpx` | The whole ETAPI client. Pre-1.0, so minor bumps may break |
 | `uvicorn` | Only used in HTTP mode, via `uvicorn.run` — the most stable of the three |
 
@@ -625,9 +625,10 @@ venv/bin/python -m pytest
 Commit `requirements.in` and `requirements.txt` together — a lockfile that does
 not match its input is worse than no lockfile.
 
-`mcp` is the one to watch. `tests/test_tools.py` covers the private API the
-server uses to inject the live note formats, so a breaking change there fails the
-suite rather than silently producing tool descriptions without a format. Beyond
+`mcp` is the one to watch. `tests/test_tools.py` covers the injection, including
+`test_the_block_reaches_a_real_client`, which drives a real client session: a
+middleware that stops being called injects nothing while every tool still lists
+correctly, and that test is what turns the silent case into a failing one. Beyond
 that, verify a real client connection before deploying:
 
 ```bash

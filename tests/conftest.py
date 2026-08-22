@@ -32,10 +32,9 @@ def server():
     Both caches are module-level and TTL-based, so without this a test that
     resolves a type would decide the outcome of the next one.
 
-    `_base_descriptions` is deliberately *not* cleared: it holds the original
-    tool descriptions, and clearing it while the Tool objects still carry a
-    mutated description would make the mutated text the new baseline — the exact
-    double-append that `test_tools.py` guards against.
+    Nothing else needs resetting: the live-format middleware mutates the
+    per-request `tools/list` payload, never the registered tools, so a test
+    cannot leave a description behind for the next one.
     """
     _server._type_cache.clear()
     _server._type_block_cache.update(text=None, ts=0.0)

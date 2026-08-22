@@ -12,7 +12,7 @@ from typing import TypedDict
 from urllib.parse import quote
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import TextContent
 
 
@@ -58,7 +58,7 @@ if not TRILIUM_API_KEY:
 
 logger = logging.getLogger("trilium-notecast-mcp")
 
-mcp = FastMCP("trilium-notecast")
+mcp = MCPServer("trilium-notecast")
 
 
 # Trilium IDs are random alphanumerics; branch IDs join two of them with "_",
@@ -81,7 +81,7 @@ _LABEL_NAME_RE = re.compile(r"^[A-Za-z0-9_]+\Z")
 # One pooled client for the process. Every ETAPI call went through a fresh
 # connection before, which meant a TCP (and TLS) handshake per request — and a
 # cold tools/list makes dozens of them. httpx.Client is thread-safe, which
-# matters because FastMCP runs sync tools in a threadpool under the HTTP
+# matters because the SDK runs sync tools in a threadpool under the HTTP
 # transport. It lives for the process; there is nothing to close.
 _client = httpx.Client(timeout=10, headers={"Authorization": TRILIUM_API_KEY})
 
@@ -833,7 +833,6 @@ class _TypeBlockCache(TypedDict):
 
 
 _type_block_cache: _TypeBlockCache = {"text": None, "ts": 0.0}
-_base_descriptions: dict[str, str] = {}
 
 _TOOL_WORKFLOW_HEADER = f"""# Notecast — Note Creation
 
@@ -920,25 +919,31 @@ def note_creation_guide() -> list[TextContent]:
     return [TextContent(type="text", text=f"{_TOOL_WORKFLOW_HEADER}\n{_build_type_block()}")]
 
 
-@mcp._mcp_server.list_tools()
-async def _list_tools_with_live_format():
-    """list_tools handler that embeds the live note formats into the create_note
-    / update_note descriptions (overrides FastMCP's default).
+async def _live_format_middleware(ctx, call_next):
+    """Embed the live note formats into the create_note / update_note
+    descriptions on every tools/list.
 
-    Uses two private SDK attributes — `mcp._mcp_server` to register a handler
-    ahead of FastMCP's own, and `mcp._tool_manager` to reach the registered Tool
-    objects. The mutation works because ToolManager.list_tools() hands back the
-    live objects rather than copies, and `_base_descriptions` keeps the block
-    from being appended twice. Both are unsupported surface: this is a reason the
-    `mcp` pin in requirements.txt is exact, and the first thing to re-verify when
-    that pin is bumped.
+    A `ServerMiddleware` — supported surface, unlike the two private attributes
+    this used to reach through (`_mcp_server` to register a handler ahead of
+    FastMCP's own, `_tool_manager` to reach the live Tool objects). It wraps
+    every inbound request; `ctx.method` selects the one we care about.
+
+    What it mutates is the *serialised* result — `{"tools": [{...}, ...]}`,
+    built fresh for each request — not the registered tools. So the block cannot
+    accumulate across connections, and the base-description bookkeeping the
+    FastMCP version needed is gone with it. `test_tools.py` pins that.
     """
+    result = await call_next(ctx)
+    if ctx.method != "tools/list" or not isinstance(result, dict):
+        return result
     block = _build_type_block()
-    for tool in mcp._tool_manager.list_tools():
-        if tool.name in _FORMAT_TOOLS:
-            base = _base_descriptions.setdefault(tool.name, tool.description)
-            tool.description = f"{base}\n\n{block}"
-    return await mcp.list_tools()
+    for tool in result.get("tools") or ():
+        if tool.get("name") in _FORMAT_TOOLS:
+            tool["description"] = f"{tool.get('description') or ''}\n\n{block}"
+    return result
+
+
+mcp.middleware.append(_live_format_middleware)
 
 
 class HealthzMiddleware:
@@ -1039,15 +1044,23 @@ def _run_http() -> None:
     # Before anything binds a port: an unauthenticated endpoint must not come up
     # far enough to answer a single request.
     guarded = _bearer_check_or_refuse(MCP_AUTH_TOKEN, MCP_ALLOW_UNAUTHENTICATED)
-    mcp.settings.streamable_http_path = MCP_PATH
+    # Passed per call rather than set on a settings object: the SDK dropped
+    # `mcp.settings`, so the path and the host check are arguments now. Leaving
+    # transport_security None keeps the SDK's localhost-only default, which is
+    # what makes a proxied request fail closed with 421 until its hostname is
+    # listed — see MCP_ALLOWED_HOSTS in the README.
+    transport_security = None
     if MCP_ALLOWED_HOSTS or MCP_ALLOWED_ORIGINS:
-        mcp.settings.transport_security = TransportSecuritySettings(
+        transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=MCP_ALLOWED_HOSTS,
             allowed_origins=MCP_ALLOWED_ORIGINS,
         )
         logger.info("DNS-rebinding protection allows hosts: %s", MCP_ALLOWED_HOSTS)
-    app = mcp.streamable_http_app()
+    app = mcp.streamable_http_app(
+        streamable_http_path=MCP_PATH,
+        transport_security=transport_security,
+    )
     if guarded:
         app = BearerAuthMiddleware(app, MCP_AUTH_TOKEN)
     # Outermost, so the probe answers with or without a bearer token.
