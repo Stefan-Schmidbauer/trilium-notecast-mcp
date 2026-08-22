@@ -13,6 +13,6 @@
 # Bumping a version is a deliberate step: edit here, re-run pip-compile, and
 # commit both files together — see README, section "Dependencies".
 
-mcp==1.28.1
+mcp==2.0.0
 httpx==0.28.1
 uvicorn==0.52.4

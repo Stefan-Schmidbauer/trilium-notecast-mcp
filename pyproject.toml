@@ -7,12 +7,7 @@ testpaths = ["tests"]
 # conftest.py must set the environment before importing server.py, so tests/
 # has to be importable as a plain directory rather than a package.
 pythonpath = ["tests", "."]
-filterwarnings = [
-    "error",
-    # pydantic-settings emits this while resolving FastMCP's own Settings model;
-    # it is not ours to fix and would otherwise fail every test under -W error.
-    "ignore::UserWarning:pydantic_settings.*",
-]
+filterwarnings = ["error"]
 
 [tool.ruff]
 line-length = 104
