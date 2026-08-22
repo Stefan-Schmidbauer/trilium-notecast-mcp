@@ -5,7 +5,8 @@
 # the MCP server can reach Trilium under its service name.
 #
 # The image is built by `deploy.sh` through a remote Docker context — there is
-# deliberately no `build:` key, so the server needs no source checkout.
+# deliberately no `build:` key, so the server needs no source checkout. It is
+# therefore local-only, which is what `pull_policy: never` below is for.
 #
 # Adjust: the Trilium service name in `depends_on` and `TRILIUM_URL`, the
 # published port, the hostnames in MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS, and
@@ -17,6 +18,10 @@
 
   trilium-notecast-mcp:
     image: trilium-notecast-mcp:local
+    # The image lives only in this daemon's local store — no registry holds it.
+    # Without `pull_policy: never`, `docker compose pull` fails on this service
+    # ("pull access denied") and aborts the pull for the whole stack.
+    pull_policy: never
     container_name: trilium-notecast-mcp
     # The image defines its own HEALTHCHECK against /healthz, which compose
     # inherits — so `restart: always` also recovers a server that is up but no

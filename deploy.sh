@@ -7,6 +7,11 @@
 # service definition and the secrets stay on the server, owned by the admin
 # user — this script only replaces the image and recreates the container.
 #
+# Because no registry holds the image, that service definition has to carry
+# `pull_policy: never` (it is in deploy/docker-compose.snippet.yml). Otherwise
+# the admin's `docker compose pull` fails on this service and aborts the pull
+# for the whole stack. The `up -d` below is unaffected either way.
+#
 # Configure it per machine in deploy.env (gitignored, see deploy/deploy.env.example)
 # or by exporting the same variables. There are no built-in host defaults.
 #
