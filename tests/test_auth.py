@@ -46,7 +46,9 @@ def guarded():
 
 @pytest.fixture
 def unguarded():
-    """What runs when MCP_AUTH_TOKEN is unset — documented, and unauthenticated."""
+    """What runs under MCP_ALLOW_UNAUTHENTICATED — the explicit opt-out, and
+    unauthenticated. Without that variable the server refuses to start at all;
+    see the startup guard below."""
     return server_module.HealthzMiddleware(_ok_app)
 
 
@@ -122,3 +124,51 @@ def test_healthz_does_not_shadow_other_paths(guarded):
     """Only the exact path is the probe — /healthz-ish paths stay guarded."""
     for path in ("/healthzz", "/healthz/x", "/mcp/healthz"):
         assert call(guarded, path=path)[0] == 401, path
+
+
+# ── the startup guard ────────────────────────────────────────────────────────
+#
+# The bearer check above only guards requests that reach a server which is
+# already running. These pin the step before it: whether an HTTP run starts at
+# all without a token, since an unauthenticated endpoint is full access to the
+# Trilium instance.
+
+def test_a_token_starts_guarded():
+    assert server_module._bearer_check_or_refuse(TOKEN, False) is True
+
+
+def test_no_token_refuses_to_start():
+    with pytest.raises(OSError) as excinfo:
+        server_module._bearer_check_or_refuse("", False)
+    # The message has to name the way out, or the refusal just blocks a deploy.
+    assert "MCP_ALLOW_UNAUTHENTICATED" in str(excinfo.value)
+
+
+def test_no_token_starts_unguarded_only_when_opted_in():
+    assert server_module._bearer_check_or_refuse("", True) is False
+
+
+def test_a_token_wins_over_the_opt_out():
+    """The opt-out is about the missing token, not a switch that disables the
+    check — a config carrying both must still be guarded."""
+    assert server_module._bearer_check_or_refuse(TOKEN, True) is True
+
+
+OPT_OUT_VALUES = {
+    "1": True, "true": True, "TRUE": True, "yes": True, " yes ": True,
+    "": False, "0": False, "false": False, "no": False, "maybe": False,
+}
+
+
+@pytest.mark.parametrize("value,expected", OPT_OUT_VALUES.items(), ids=list(OPT_OUT_VALUES))
+def test_opt_out_parsing(monkeypatch, value, expected):
+    """A variable set to "0" or "false" must read as off, and an unrecognised
+    value must fall to the safe side rather than count as on because it is
+    non-empty."""
+    monkeypatch.setenv("MCP_ALLOW_UNAUTHENTICATED", value)
+    assert server_module._env_flag("MCP_ALLOW_UNAUTHENTICATED") is expected
+
+
+def test_opt_out_is_off_when_unset(monkeypatch):
+    monkeypatch.delenv("MCP_ALLOW_UNAUTHENTICATED", raising=False)
+    assert server_module._env_flag("MCP_ALLOW_UNAUTHENTICATED") is False

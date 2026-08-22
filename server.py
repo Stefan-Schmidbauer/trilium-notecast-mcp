@@ -15,6 +15,18 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import TextContent
 
+
+def _env_flag(name: str) -> bool:
+    """An on/off switch from the environment.
+
+    Not `bool(os.getenv(...))`: a variable set to "0" or "false" reads as *off*
+    the way anyone writing it into a compose file expects, and anything the list
+    does not name falls to the safe side rather than counting as on because it is
+    non-empty.
+    """
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes"}
+
+
 # rstrip: a trailing slash here would produce "…//etapi/…" in every request path.
 TRILIUM_URL = os.getenv("TRILIUM_URL", "http://localhost:8080").rstrip("/")
 TRILIUM_API_KEY = os.getenv("TRILIUM_API_KEY", "")
@@ -28,6 +40,10 @@ MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 MCP_PATH = os.getenv("MCP_PATH", "/mcp")
 # Optional second layer on top of "only reachable inside the tailnet".
 MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN", "")
+# Serving HTTP without MCP_AUTH_TOKEN is refused rather than warned about, because
+# reaching the endpoint means reaching the whole Trilium instance. This is the
+# deliberate opt-out for a deployment that authenticates one layer further out.
+MCP_ALLOW_UNAUTHENTICATED = _env_flag("MCP_ALLOW_UNAUTHENTICATED")
 # Hosts/origins accepted by the SDK's DNS-rebinding protection. Comma-separated;
 # needed because we are reached through a reverse proxy under its own hostname.
 MCP_ALLOWED_HOSTS = [h.strip() for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
@@ -985,10 +1001,44 @@ async def _plain_response(send, status: int, body: bytes) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+def _bearer_check_or_refuse(token: str, allow_unauthenticated: bool) -> bool:
+    """Decide whether an HTTP run may start, and whether it is guarded.
+
+    A refusal rather than a warning: in HTTP mode reaching the endpoint means
+    reaching the whole Trilium instance, so an unauthenticated endpoint is a
+    decision, not a default one can slip into by leaving a variable unset. The
+    log line it used to emit scrolled past in the container output and the
+    server kept serving.
+
+    Returns True when the bearer check will be installed, False when the
+    operator opted out explicitly. Raises OSError when neither is the case.
+    """
+    if token:
+        return True
+    if not allow_unauthenticated:
+        raise OSError(
+            "MCP_AUTH_TOKEN is not set, so the HTTP endpoint would be unauthenticated —\n"
+            "and reaching it means reaching the whole Trilium instance: an ETAPI token\n"
+            "covers every note, and this is the only check in front of it.\n"
+            "Set MCP_AUTH_TOKEN to a random secret (openssl rand -hex 32), or set\n"
+            "MCP_ALLOW_UNAUTHENTICATED=1 if something in front of the server does the\n"
+            "authentication and you accept that. Neither replaces a network boundary —\n"
+            "see the Security model section of the README."
+        )
+    logger.warning(
+        "MCP_ALLOW_UNAUTHENTICATED is set — the endpoint is served without a bearer "
+        "check. Anyone who can reach it has full access to the Trilium instance."
+    )
+    return False
+
+
 def _run_http() -> None:
     import uvicorn
     from mcp.server.transport_security import TransportSecuritySettings
 
+    # Before anything binds a port: an unauthenticated endpoint must not come up
+    # far enough to answer a single request.
+    guarded = _bearer_check_or_refuse(MCP_AUTH_TOKEN, MCP_ALLOW_UNAUTHENTICATED)
     mcp.settings.streamable_http_path = MCP_PATH
     if MCP_ALLOWED_HOSTS or MCP_ALLOWED_ORIGINS:
         mcp.settings.transport_security = TransportSecuritySettings(
@@ -998,13 +1048,8 @@ def _run_http() -> None:
         )
         logger.info("DNS-rebinding protection allows hosts: %s", MCP_ALLOWED_HOSTS)
     app = mcp.streamable_http_app()
-    if MCP_AUTH_TOKEN:
+    if guarded:
         app = BearerAuthMiddleware(app, MCP_AUTH_TOKEN)
-    else:
-        logger.warning(
-            "MCP_AUTH_TOKEN is not set — the endpoint is unauthenticated. "
-            "Only expose it inside a trusted network."
-        )
     # Outermost, so the probe answers with or without a bearer token.
     app = HealthzMiddleware(app)
     logger.info("Serving MCP over HTTP on %s:%s%s", MCP_HOST, MCP_PORT, MCP_PATH)

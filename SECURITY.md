@@ -40,6 +40,10 @@ Known and documented, so **not** a finding on their own — see the README:
 - `MCP_AUTH_TOKEN` is a static shared secret with no rotation, no per-client
   identity and no rate limiting; running the endpoint without a network boundary
   in front of it is out of scope
+- an endpoint served without any bearer check under `MCP_ALLOW_UNAUTHENTICATED=1`
+  — that variable is the documented opt-out, so it is the deployment's decision
+  and not a bypass. A way to reach the *same* state without setting it — HTTP
+  mode coming up unauthenticated although the variable is unset — is a finding
 - anyone who can label a note defines a note type, and a type's content reaches
   the model as instructions — this is the design, not a boundary that failed
 - note content returned by `get_note` / `search_notes` reaches the model as text

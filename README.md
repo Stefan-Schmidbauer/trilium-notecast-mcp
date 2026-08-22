@@ -8,6 +8,12 @@
 [![Presenter plugin](https://img.shields.io/badge/Notecast-presenter%20plugin-0a7ea4)](https://github.com/Stefan-Schmidbauer/trilium-presenter-plugin)
 [![Render plugin](https://img.shields.io/badge/Notecast-render%20plugin-0a7ea4)](https://github.com/Stefan-Schmidbauer/trilium-notecast-render)
 
+> **Status: 0.x.** The tools and the label contract are in use and tested, but
+> nothing here is frozen: a tool signature or a `#notecast*` label may still
+> change between releases, and there are no backports. Pin a tag if that matters
+> to you. For where the HTTP mode may be run, see
+> [Security model](#security-model).
+
 MCP server for [Trilium Notes](https://github.com/TriliumNext/Trilium) — author and manage **typed notes** via the ETAPI. The authoring specialist of the **Notecast** family (see [docs/notecast-contract.md](docs/notecast-contract.md)).
 
 A "type" — `slide`, `expenseReport`, `wikiEntry`, anything — is defined by a Trilium note labelled `#notecastType=<id>` whose content is the authoring format and whose labels carry the mechanics (target note type, mime, labels to stamp, default parent, branch prefix). Adding a type is tagging a note; this server ships **no** type definitions — it is a pure engine.
@@ -218,6 +224,16 @@ In this mode the server speaks **streamable HTTP**, so remote MCP clients reach
 one shared instance instead of each spawning their own — nothing is installed on
 the client machines.
 
+> **Before you run this mode, decide where.** Reaching the endpoint means
+> reaching the *whole* Trilium instance — Trilium has no user management, so the
+> ETAPI token this server holds covers every note, and `MCP_AUTH_TOKEN` is the
+> only check in front of it. This mode is designed for an internal network or a
+> VPN (Tailscale, WireGuard or equivalent), with the port published on localhost
+> and a reverse proxy in front; the bearer token is a second layer, not the
+> boundary. **Do not put it on the public internet.** The server refuses to start
+> in HTTP mode without `MCP_AUTH_TOKEN` for that reason.
+> [Security model](#security-model) has the full picture.
+
 There are three ways to run it, and all three are the *same* server:
 `MCP_TRANSPORT=streamable-http` is what switches the transport, and the
 `Dockerfile` is nothing more than a container that sets that variable and starts
@@ -241,7 +257,8 @@ The server is configured through the same `TRILIUM_*` variables as above, plus:
 | `MCP_TRANSPORT` | `stdio` (default) or `streamable-http` — the one variable that selects the mode |
 | `MCP_HOST` / `MCP_PORT` | Address the server binds to (default `127.0.0.1:8000`; the image sets `0.0.0.0` so the port can be published) |
 | `MCP_PATH` | Endpoint path (default `/mcp`) |
-| `MCP_AUTH_TOKEN` | If set, clients must send `Authorization: Bearer <token>`. Unset means **no authentication** |
+| `MCP_AUTH_TOKEN` | Clients must send `Authorization: Bearer <token>`. **Required in HTTP mode** — without it the server refuses to start |
+| `MCP_ALLOW_UNAUTHENTICATED` | `1` starts HTTP mode without any bearer check. Only for a deployment that authenticates one layer further out |
 | `MCP_ALLOWED_HOSTS` | Comma-separated hostnames accepted by the SDK's DNS-rebinding protection. Required when reached through a reverse proxy under its own hostname |
 | `MCP_ALLOWED_ORIGINS` | Comma-separated origins accepted for CORS/rebinding checks |
 
@@ -469,6 +486,14 @@ secret: no rotation, no per-client identity, no rate limiting. Writes and
 deletions leave no audit trail beyond Trilium's own revision history. In effect
 the bearer token carries the same weight as the ETAPI token.
 
+Because of that weight, serving HTTP without one is refused rather than warned
+about: `MCP_TRANSPORT=streamable-http` with no `MCP_AUTH_TOKEN` exits before
+anything binds a port. `MCP_ALLOW_UNAUTHENTICATED=1` is the deliberate opt-out
+for a deployment where something in front does the authentication — it is a
+statement that the endpoint is unauthenticated on purpose, not a fallback to
+reach for when the token is inconvenient. Neither setting substitutes for the
+network boundary below.
+
 The setup this is designed for is accordingly an internal network or a VPN
 (Tailscale, WireGuard or equivalent), with the container port published on
 localhost and a reverse proxy in front, and the bearer token as a second layer
@@ -528,7 +553,7 @@ this README makes:
 |---|---|
 | `test_id_validation.py` | `_id()` guards the ETAPI path: no request is *sent* for an ID containing `..`, `?`, `#` or CRLF |
 | `test_type_resolution.py` | a type resolves to exactly one definition, or refuses loudly — and discovery does not fan out into a request per type |
-| `test_auth.py` | the bearer check rejects a missing, wrong, prefix-matching or non-UTF-8 header; `/healthz` answers with and without a configured token |
+| `test_auth.py` | the bearer check rejects a missing, wrong, prefix-matching or non-UTF-8 header; HTTP mode refuses to start without a token unless the opt-out is set; `/healthz` answers with and without a configured token |
 | `test_tools.py` | the live format reaches `create_note` / `update_note` and does not compound across connections — the private-SDK-API guard |
 | `test_attachments.py` | an image survives the roundtrip byte for byte, goes out as `application/octet-stream`, and gets the reference form its note's target type needs |
 
