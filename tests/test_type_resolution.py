@@ -325,3 +325,67 @@ def test_labels_are_validated_before_the_type_is_looked_up(server, trilium):
 
     assert "INVALID LABEL NAME" in out
     assert trilium.created == []
+
+
+# ── move_node ────────────────────────────────────────────────────────────────
+# `new_position` promised an index and delivered `index * 10` written straight
+# onto the branch. Since Trilium spaces siblings ten apart, every reachable
+# value collided with a sibling already sitting there, and what came out of the
+# tie was Trilium's choice. Measured on a live deck: 25 — meant as "between 20
+# and 30" — became 250 and moved the note to the end. These tests pin the index
+# down as an index.
+
+@pytest.fixture
+def deck(trilium):
+    """Seven siblings at 10, 20 … 70 — Trilium's own spacing."""
+    trilium.add_children("deck", "a", "b", "c", "d", "e", "f", "g")
+    return trilium
+
+
+@pytest.mark.parametrize("index,expected", [
+    (0, ["g", "a", "b", "c", "d", "e", "f"]),
+    (2, ["a", "b", "g", "c", "d", "e", "f"]),
+    (6, ["a", "b", "c", "d", "e", "f", "g"]),
+])
+def test_move_node_puts_the_note_at_that_index(server, deck, index, expected):
+    server.move_node("deck_g", index)
+
+    assert deck.order_under("deck") == expected
+
+
+def test_move_node_inserts_between_two_neighbours(server, deck):
+    """The case the old arithmetic could not express at all."""
+    server.move_node("deck_f", 1)
+
+    assert deck.order_under("deck") == ["a", "f", "b", "c", "d", "e", "g"]
+
+
+def test_positions_stay_ten_apart_after_a_move(server, deck):
+    server.move_node("deck_e", 0)
+
+    assert deck.positions_under("deck") == [10, 20, 30, 40, 50, 60, 70]
+
+
+@pytest.mark.parametrize("index,expected_index", [(-5, 0), (99, 6)])
+def test_out_of_range_indexes_clamp(server, deck, index, expected_index):
+    result = json.loads(server.move_node("deck_c", index))
+
+    assert result["newPosition"] == expected_index
+    assert deck.order_under("deck").index("c") == expected_index
+
+
+def test_a_move_that_changes_nothing_writes_nothing(server, deck):
+    """`c` is already third; renumbering it to the same places must not PATCH."""
+    result = json.loads(server.move_node("deck_c", 2))
+
+    assert result["renumbered"] == 0
+    assert deck.branches_patched == []
+
+
+def test_only_the_branches_that_shift_are_written(server, deck):
+    """Moving the last note to the front shifts every sibling — but no more."""
+    result = json.loads(server.move_node("deck_g", 0))
+
+    assert result["renumbered"] == 7
+    assert {p["branchId"] for p in deck.branches_patched} == {
+        f"deck_{n}" for n in "abcdefg"}

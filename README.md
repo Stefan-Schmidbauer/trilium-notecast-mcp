@@ -49,7 +49,7 @@ first, `tools/seed-demo-type.py` tags one throwaway type and removes it again.
 | `get_note_info` | Get note metadata (title, type, children, attributes) |
 | `list_children` | List a note's direct children (tree navigation) |
 | `clone_node` | Clone a note into another parent (a branch, not a copy) |
-| `move_node` | Reorder a note within its parent |
+| `move_node` | Move a note to the n-th place among its siblings (0-based index) |
 | `delete_note` | Delete a note |
 | `search_notes` | Search notes (supports `#label` syntax) |
 

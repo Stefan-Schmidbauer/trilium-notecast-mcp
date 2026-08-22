@@ -295,7 +295,7 @@ traversal is gone.
 | `get_note(note_id)` | `get_slide` | |
 | `list_children(parent_note_id)` | `list_presentations` | Plain navigation for authoring — **not** the presenter traversal. |
 | `clone_node(note_id, target_parent_id)` | `clone_slide` | Kept generic; mostly the user's job, but cheap and useful. |
-| `move_node(branch_id, new_position)` | `move_slide` | Kept generic (reordering after authoring). |
+| `move_node(branch_id, new_position)` | `move_slide` | Kept generic (reordering after authoring). `new_position` is a 0-based index among the siblings; the whole sibling set is renumbered so that it is one. |
 | `delete_note(note_id)` | `delete_note` | Unchanged. |
 | `get_note_info(note_id)` | `get_note_info` | Unchanged. |
 | `search_notes(query, limit)` | `search_notes` | Unchanged. |

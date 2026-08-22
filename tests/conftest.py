@@ -60,6 +60,11 @@ class FakeTrilium:
         self.created: list[dict] = []
         self.attributes_set: list[dict] = []
         self.attributes_patched: list[dict] = []
+        # Branches keyed by branchId. Order lives here, not on the note — which
+        # is the whole point of the move_node tests: a double that only tracked
+        # childNoteIds could not tell a correct reordering from a no-op.
+        self.branches: dict[str, dict] = {}
+        self.branches_patched: list[dict] = []
         # Attachments keyed by attachmentId. `content_writes` records the raw
         # body *and* the Content-Type of every write, because the Content-Type is
         # the part that decides whether Trilium stores the bytes or mangles them.
@@ -116,6 +121,10 @@ class FakeTrilium:
         respx_mock.post(path="/etapi/attributes").mock(side_effect=self._attribute_route)
         respx_mock.patch(path__regex=r"^/etapi/attributes/(?P<aid>[^/]+)$").mock(
             side_effect=self._attribute_patch_route)
+        respx_mock.get(path__regex=r"^/etapi/branches/(?P<bid>[^/]+)$").mock(
+            side_effect=self._branch_route)
+        respx_mock.patch(path__regex=r"^/etapi/branches/(?P<bid>[^/]+)$").mock(
+            side_effect=self._branch_patch_route)
         respx_mock.post(path="/etapi/attachments").mock(side_effect=self._attachment_create_route)
         respx_mock.put(path__regex=r"^/etapi/attachments/(?P<aid>[^/]+)/content$").mock(
             side_effect=self._attachment_content_route)
@@ -129,6 +138,53 @@ class FakeTrilium:
         }
         self.content.setdefault(note_id, "")
         return note_id
+
+    def add_children(self, parent_id: str, *note_ids: str, step: int = 10):
+        """Hang notes under a parent with Trilium's default ten-apart spacing.
+
+        The spacing is the point: `move_node` has to cope with siblings sitting
+        on multiples of ten, because that is what Trilium produces.
+        """
+        parent = self.notes.setdefault(parent_id, {
+            "noteId": parent_id, "title": parent_id, "type": "text",
+            "attributes": [], "childNoteIds": [],
+        })
+        for i, note_id in enumerate(note_ids, start=1):
+            if note_id not in self.notes:
+                self.add_note(note_id, title=note_id)
+            branch_id = f"{parent_id}_{note_id}"
+            self.branches[branch_id] = {
+                "branchId": branch_id, "noteId": note_id,
+                "parentNoteId": parent_id, "notePosition": i * step,
+            }
+            parent["childNoteIds"].append(note_id)
+        parent["childBranchIds"] = [b["branchId"] for b in self.branches.values()
+                                    if b["parentNoteId"] == parent_id]
+        return parent_id
+
+    def order_under(self, parent_id: str) -> list[str]:
+        """Sibling note ids in notePosition order — what the tree would show."""
+        kids = [b for b in self.branches.values() if b["parentNoteId"] == parent_id]
+        return [b["noteId"] for b in sorted(kids, key=lambda b: b["notePosition"])]
+
+    def positions_under(self, parent_id: str) -> list[int]:
+        kids = [b for b in self.branches.values() if b["parentNoteId"] == parent_id]
+        return sorted(b["notePosition"] for b in kids)
+
+    def _branch_route(self, request, bid):
+        branch = self.branches.get(bid)
+        if branch is None:
+            return httpx.Response(404, json={"message": f"no branch {bid}"})
+        return httpx.Response(200, json=branch)
+
+    def _branch_patch_route(self, request, bid):
+        branch = self.branches.get(bid)
+        if branch is None:
+            return httpx.Response(404, json={"message": f"no branch {bid}"})
+        body = json.loads(request.content)
+        branch.update(body)
+        self.branches_patched.append({"branchId": bid, **body})
+        return httpx.Response(200, json=branch)
 
     def _attachment_create_route(self, request):
         body = json.loads(request.content)

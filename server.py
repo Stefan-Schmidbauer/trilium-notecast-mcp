@@ -712,18 +712,57 @@ def clone_node(note_id: str, target_parent_id: str, prefix: str | None = None) -
 
 @mcp.tool()
 def move_node(branch_id: str, new_position: int) -> str:
-    """Change the position (order) of a note within its parent.
+    """Move a note to the n-th place among its siblings.
+
+    `new_position` is a **0-based index**, not a Trilium notePosition: 0 makes
+    the note first, 1 second, and any value at or past the end makes it last.
+    Negative values clamp to 0.
+
+    Why this renumbers the whole sibling set rather than writing one number:
+    Trilium keeps order as an integer on the *branch* and spaces siblings ten
+    apart (10, 20, 30 …). This used to write `new_position * 10`, which meant
+    every reachable value landed exactly on a sibling that was already there —
+    "insert between these two" was not expressible at all, and the order that
+    came out of the tie was Trilium's to decide, not the caller's. Measured on a
+    live instance: moving a note to index 2 in a seven-slide deck put it third
+    only because the tie happened to break that way, and passing 25 in the hope
+    of landing between 20 and 30 wrote 250 and moved the note to the end.
+
+    Rewriting every sibling costs one PATCH per note that actually shifts, on an
+    operation that is rare and small (the children of one note). Positions that
+    already match are left alone, so a no-op move writes nothing.
 
     Use list_children / get_note_info to find the branchId.
 
     Args:
         branch_id: The branch ID of the note to move.
-        new_position: New position index (higher = later).
+        new_position: 0-based index among the siblings after the move.
     Returns:
-        JSON confirming the move.
+        JSON with the index actually used and how many branches were renumbered.
     """
-    _patch(f"branches/{_id(branch_id)}", {"notePosition": new_position * 10})
-    return json.dumps({"branchId": branch_id, "newPosition": new_position})
+    branch = _get(f"branches/{_id(branch_id)}")
+    parent = _get(f"notes/{_id(branch['parentNoteId'])}")
+
+    # Read every sibling's position: childBranchIds carries no order of its own,
+    # and the order is the thing being changed, so it cannot be assumed.
+    positions: dict[str, int] = {}
+    for sibling_id in parent.get("childBranchIds", []):
+        sibling = branch if sibling_id == branch_id else _get(f"branches/{_id(sibling_id)}")
+        positions[sibling_id] = sibling.get("notePosition", 0)
+    positions.setdefault(branch_id, branch.get("notePosition", 0))
+
+    order = sorted((b for b in positions if b != branch_id), key=lambda b: positions[b])
+    index = max(0, min(int(new_position), len(order)))
+    order.insert(index, branch_id)
+
+    renumbered = 0
+    for i, sibling_id in enumerate(order, start=1):
+        want = i * 10
+        if positions.get(sibling_id) != want:
+            _patch(f"branches/{_id(sibling_id)}", {"notePosition": want})
+            renumbered += 1
+    return json.dumps({"branchId": branch_id, "newPosition": index,
+                       "renumbered": renumbered})
 
 
 @mcp.tool()
