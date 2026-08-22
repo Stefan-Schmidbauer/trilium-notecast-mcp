@@ -69,8 +69,10 @@ def sha(b: bytes) -> str:
 
 
 def report(label: str, sent: bytes, got: bytes | None, err: str | None = None) -> bool:
-    if err:
-        print(f"  {label:<34} ERROR  {err}")
+    # `got is None` always comes with an `err`, but checking both here is what
+    # lets the comparison below work on bytes rather than on an optional.
+    if err or got is None:
+        print(f"  {label:<34} ERROR  {err or 'no content'}")
         return False
     ok = sent == got
     print(f"  {label:<34} {'OK  ' if ok else 'FAIL'}   "

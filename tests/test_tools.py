@@ -53,8 +53,7 @@ def test_other_tools_are_left_alone(server, slide_type):
 def test_repeated_list_tools_does_not_compound_the_block(server, slide_type):
     """Every client connect calls this; the block must not stack up."""
     first = described(list_tools(server), "create_note")
-    for _ in range(4):
-        latest = described(list_tools(server), "create_note")
+    latest = [described(list_tools(server), "create_note") for _ in range(4)][-1]
 
     assert latest == first
     assert latest.count("Note formats (live from Trilium") == 1
