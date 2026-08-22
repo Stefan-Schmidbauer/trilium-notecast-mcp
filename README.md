@@ -34,8 +34,7 @@ server alongside your AI assistant. **Types ship with the output plugin that
 gives them a visible form** — the presenter owns `slide`, the renderer owns the
 document types (`note`, `kbEntry`, `meetingNote`, `checklist`, `itTip`,
 `letter`, `handout`). This server authors whatever the instance defines and
-nothing more,
-so a fresh install with neither plugin has no type to write: to try the engine
+nothing more, so a fresh install with neither plugin has no type to write: to try the engine
 first, `tools/seed-demo-type.py` tags one throwaway type and removes it again.
 
 ## Tools
@@ -290,7 +289,7 @@ full service definition, with resource limits and a hardened container
 (`read_only`, `cap_drop: ALL`, `no-new-privileges`). Paste it into the compose
 file that runs Trilium — it is indented to drop straight under `services:` — and
 adjust the four things its header comment names: the Trilium service name in
-`depends_on` and `TRILIUM_URL`, the published port, the hostnames in
+`TRILIUM_URL`, the published port, the hostnames in
 `MCP_ALLOWED_HOSTS` / `MCP_ALLOWED_ORIGINS`, and the network. In outline:
 
 ```yaml
@@ -298,8 +297,7 @@ adjust the four things its header comment names: the Trilium service name in
     image: trilium-notecast-mcp:local   # built above; no build: key on purpose
     pull_policy: never                  # local-only image; see below
     restart: always
-    depends_on:
-      - triliumnext
+    # no depends_on: on purpose — see below
     ports:
       - "127.0.0.1:9151:8000"           # localhost only — the proxy exposes it
     env_file:
@@ -324,7 +322,7 @@ docker compose up -d trilium-notecast-mcp
 docker compose logs -f trilium-notecast-mcp
 ```
 
-Three things to get right, all of which fail in confusing ways:
+Four things to get right, all of which fail in confusing ways:
 
 - **`pull_policy: never` is not cosmetic.** The image is built locally — by
   `docker build` here, or by [`deploy.sh`](#deployment) straight onto the server
@@ -335,6 +333,14 @@ Three things to get right, all of which fail in confusing ways:
   Trilium is on — otherwise compose fails with *"network web not found"*, or the
   service name in `TRILIUM_URL` does not resolve. If the stack uses only its
   implicit default network, drop the `networks:` key entirely.
+- **There is deliberately no `depends_on`.** It would only order the start, not
+  wait for readiness, and this server does not touch Trilium until its first
+  tool call — so it buys nothing. What it costs is that `docker compose up -d
+  trilium-notecast-mcp` then pulls Trilium up with it and **recreates** it if
+  its configuration has drifted from what is running, which is how a deploy of
+  this service alone can restart Trilium and carry it across a database
+  migration. `deploy.sh` passes `--no-deps` as well, because the compose file on
+  the server is a copy nothing keeps in sync with the snippet.
 - **`MCP_HOST=0.0.0.0` belongs here**, unlike in variant C: the process must
   listen on the container's external interface for the published port to reach
   it. Confining the exposure is the job of the `127.0.0.1:` prefix in `ports:`.

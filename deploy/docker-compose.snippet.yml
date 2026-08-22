@@ -8,9 +8,9 @@
 # deliberately no `build:` key, so the server needs no source checkout. It is
 # therefore local-only, which is what `pull_policy: never` below is for.
 #
-# Adjust: the Trilium service name in `depends_on` and `TRILIUM_URL`, the
-# published port, the hostnames in MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS, and
-# the network name at the bottom — `web` has to be one the target compose file
+# Adjust: the Trilium service name in `TRILIUM_URL`, the published port, the
+# hostnames in MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS, and the network name at
+# the bottom — `web` has to be one the target compose file
 # already declares, and it must be the same one Trilium is on, or the service
 # name in TRILIUM_URL will not resolve. Compose fails with "network web not
 # found" if it is absent; drop the `networks:` key entirely if the stack uses
@@ -27,8 +27,15 @@
     # inherits — so `restart: always` also recovers a server that is up but no
     # longer answering. Nothing to declare here.
     restart: always
-    depends_on:
-      - triliumnext
+    # No `depends_on:` on purpose. It would buy nothing — without
+    # `condition: service_healthy` it only orders the *start*, and this server
+    # touches Trilium on the first tool call, not at startup, so a Trilium that
+    # arrives later is never noticed. What it does buy is a hazard: `docker
+    # compose up -d trilium-notecast-mcp` pulls declared dependencies up with
+    # it and recreates them if their configuration has drifted from what is
+    # running — so a deploy of *this* service silently restarted Trilium and,
+    # because a newer image happened to be on the host, upgraded it across a
+    # database migration. deploy.sh passes --no-deps for the same reason.
     deploy:
       resources:
         limits:

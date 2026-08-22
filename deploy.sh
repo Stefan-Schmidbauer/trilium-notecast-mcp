@@ -80,8 +80,16 @@ fi
 # every interpolated value is single-quoted. They come from deploy.env, not from
 # anything untrusted — the quoting is here so that a path with a space stays one
 # argument, and so this file is not a template for doing it unquoted elsewhere.
+# --no-deps is not optional. Without it, `up -d <service>` brings the service's
+# declared dependencies up too and recreates any whose configuration has drifted
+# from what is running — so deploying this server restarted the Trilium beside
+# it and, because a newer image sat on the host, carried it across a database
+# migration nobody had asked for. The compose file on the server is the admin's
+# copy and nothing keeps it in sync with deploy/docker-compose.snippet.yml, so
+# dropping `depends_on` there is not enough: this flag is what makes a deploy of
+# this service touch only this service, whatever that file says.
 info "Recreating ${SERVICE} via ${REMOTE_COMPOSE}"
-ssh "$DEPLOY_HOST" "docker compose -f '${REMOTE_COMPOSE}' up -d '${SERVICE}'"
+ssh "$DEPLOY_HOST" "docker compose -f '${REMOTE_COMPOSE}' up -d --no-deps '${SERVICE}'"
 
 # --- verify ------------------------------------------------------------------
 info "Waiting for the server to answer"
