@@ -5,10 +5,38 @@
 [![TriliumNext](https://img.shields.io/badge/TriliumNext-compatible-000000?logo=trilium&logoColor=white)](https://triliumnotes.org)
 [![MCP](https://img.shields.io/badge/MCP-server-7c3aed)](https://modelcontextprotocol.io)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org)
+[![Presenter plugin](https://img.shields.io/badge/Notecast-presenter%20plugin-0a7ea4)](https://github.com/Stefan-Schmidbauer/trilium-presenter-plugin)
+[![Render plugin](https://img.shields.io/badge/Notecast-render%20plugin-0a7ea4)](https://github.com/Stefan-Schmidbauer/trilium-notecast-render)
 
 MCP server for [Trilium Notes](https://github.com/TriliumNext/Trilium) — author and manage **typed notes** via the ETAPI. The authoring specialist of the **Notecast** family (see [docs/notecast-contract.md](docs/notecast-contract.md)).
 
-A "type" — `slide`, `expenseReport`, `wikiEntry`, anything — is defined by a Trilium note labelled `#notecastType=<id>` whose content is the authoring format and whose labels carry the mechanics (target note type, mime, labels to stamp, default parent, branch prefix). Adding a type is tagging a note; this server ships **no** type definitions — it is a pure engine. Types ship with the output plugin that renders them — [trilium-presenter-plugin](https://github.com/Stefan-Schmidbauer/trilium-presenter-plugin) owns `slide`, [trilium-notecast-render](https://github.com/Stefan-Schmidbauer/trilium-notecast-render) owns the document types (`note`, `kbEntry`, `meetingNote`, `checklist`, `itTip`, `letter`) — installed into Trilium separately; the two only meet inside Trilium. To try the engine before installing either, `tools/seed-demo-type.py` tags one throwaway type and removes it again. Each type's format is loaded live from its note and embedded directly into the `create_note` / `update_note` tool descriptions, so it reliably reaches the model on every client. Formats stay in a single place — editable directly in Trilium. Changes take effect on the next connection; if a type is missing, duplicated, or unreachable, the tool emits a loud "do not guess" notice and creates nothing, so a missing format can never masquerade as the real one.
+A "type" — `slide`, `expenseReport`, `wikiEntry`, anything — is defined by a Trilium note labelled `#notecastType=<id>` whose content is the authoring format and whose labels carry the mechanics (target note type, mime, labels to stamp, default parent, branch prefix). Adding a type is tagging a note; this server ships **no** type definitions — it is a pure engine.
+
+Each type's format is loaded live from its note and embedded directly into the `create_note` / `update_note` tool descriptions, so it reliably reaches the model on every client. Formats stay in a single place — editable directly in Trilium. Changes take effect on the next connection; if a type is missing, duplicated, or unreachable, the tool emits a loud "do not guess" notice and creates nothing, so a missing format can never masquerade as the real one.
+
+## The Notecast family
+
+This server is the **authoring** specialist of three repositories that read and
+write the same Trilium notes, each doing one job:
+
+| Repo | Role |
+|---|---|
+| **`trilium-notecast-mcp`** (this repo) | **authors typed notes (`#notecastType`) via the ETAPI** |
+| [`trilium-presenter-plugin`](https://github.com/Stefan-Schmidbauer/trilium-presenter-plugin) | presents a subtree on screen |
+| [`trilium-notecast-render`](https://github.com/Stefan-Schmidbauer/trilium-notecast-render) | renders a note to print/PDF in a chosen theme |
+
+They never call each other. They are coupled only through Trilium, by a handful
+of labels — the shared [label contract](docs/notecast-contract.md), which lives
+in this repo and is binding on all three.
+
+Each is installed separately: the two plugins as Trilium note imports, this
+server alongside your AI assistant. **Types ship with the output plugin that
+gives them a visible form** — the presenter owns `slide`, the renderer owns the
+document types (`note`, `kbEntry`, `meetingNote`, `checklist`, `itTip`,
+`letter`, `handout`). This server authors whatever the instance defines and
+nothing more,
+so a fresh install with neither plugin has no type to write: to try the engine
+first, `tools/seed-demo-type.py` tags one throwaway type and removes it again.
 
 ## Tools
 
@@ -55,7 +83,7 @@ Every defined type's full authoring format is embedded into the `create_note`
 *and* `update_note` descriptions, so the block is sent twice on every connection.
 That is deliberate — it is the only path guaranteed to reach the model — but it
 means the context cost grows with the number of types, not with the number in
-use. With the types the two output plugins ship (seven — six from the renderer,
+use. With the types the two output plugins ship (eight — seven from the renderer,
 `slide` from the presenter) this is comfortable; a few dozen would not be. Discovery itself is capped at 100 `#notecastType` notes.
 
 If you reach that point, the fix is to split types across separate server
@@ -73,15 +101,23 @@ The server speaks two transports. Both run the same `server.py` against the same
 ETAPI token — only environment variables differ — so pick the one that matches
 your setup and follow just that section:
 
-| | [Local (stdio)](#local-stdio) | [Shared (HTTP, Docker)](#shared-http-docker) |
+| | [Local (stdio)](#local-stdio) | [Shared (HTTP)](#shared-http) |
 |---|---|---|
 | **Use when** | One machine — your laptop runs both Trilium and the MCP client | Several clients or machines share one instance over the network |
-| **How it runs** | The MCP client spawns the server as a subprocess | A container serves an HTTP endpoint |
-| **Needs** | Python 3.11+ and a virtualenv ([why not 3.10](#why-python-311-and-not-310)) | Docker; no local Python |
+| **How it runs** | The MCP client spawns the server as a subprocess | A long-running process serves an HTTP endpoint |
+| **Needs** | Python 3.11+ and a virtualenv ([why not 3.10](#why-python-311-and-not-310)) | Docker — or the same virtualenv, if you would rather not run a container |
 | **Auth** | None — it is a local subprocess | Bearer token, behind a reverse proxy |
 
 Both need a Trilium ETAPI token: **Trilium → Options → ETAPI → Create new
 token**.
+
+Everything below is a manual install, and that is the whole story — there is no
+installer and nothing that has to be registered anywhere. The transport is
+picked by one environment variable, so the two modes differ in how you start the
+same `server.py`, not in what gets installed. `deploy.sh` and the
+[Deployment](#deployment) section are a convenience for one specific case — a
+container on a *remote* machine, built without a registry — and are safe to skip
+entirely: nothing in this section depends on them.
 
 ### Local (stdio)
 
@@ -94,14 +130,17 @@ virtualenv on the machine hosting the MCP client, which starts and stops it.
 git clone https://github.com/Stefan-Schmidbauer/trilium-notecast-mcp.git
 cd trilium-notecast-mcp
 python3 -m venv venv
-venv/bin/pip install -r requirements.txt
+venv/bin/pip install --require-hashes -r requirements.txt
 ```
 
-This creates the `venv/` folder the config below points at.
+This creates the `venv/` folder the config below points at. `--require-hashes`
+is what the Dockerfile and CI use as well; `requirements.txt` carries hashes, so
+pip verifies them either way — passing the flag makes a lockfile that no longer
+verifies fail here rather than install quietly.
 
 > **Windows:** use the `venv\Scripts\` paths instead of `venv/bin/` throughout
-> this guide — e.g. `venv\Scripts\pip.exe install -r requirements.txt` to
-> install and `venv\Scripts\python.exe` as the `command` in the config below.
+> this guide — so `venv\Scripts\pip.exe` to install, and `venv\Scripts\python.exe`
+> as the `command` in the config below.
 
 #### 2. Register the server in your MCP client
 
@@ -165,21 +204,34 @@ TRILIUM_URL=http://localhost:8080 TRILIUM_API_KEY=your-etapi-token \
 This opens a local UI where you can list and call each tool against your
 Trilium instance.
 
-### Shared (HTTP, Docker)
+### Shared (HTTP)
 
 In this mode the server speaks **streamable HTTP**, so remote MCP clients reach
-one shared instance instead of each spawning their own. The `Dockerfile` builds
-an image that defaults to it — nothing is installed on the client machines.
+one shared instance instead of each spawning their own — nothing is installed on
+the client machines.
+
+There are three ways to run it, and all three are the *same* server:
+`MCP_TRANSPORT=streamable-http` is what switches the transport, and the
+`Dockerfile` is nothing more than a container that sets that variable and starts
+`server.py`. Pick by how you already run things:
+
+| Variant | Use when |
+|---|---|
+| **[A — Docker Compose](#variant-a--docker-compose)** | Trilium itself runs in a compose stack. The usual case, and the two containers then share a network |
+| **[B — `docker run`](#variant-b--docker-run)** | A single container, no stack — the quickest way to try the HTTP mode |
+| **[C — virtualenv, no Docker](#variant-c--virtualenv-no-docker)** | You have no Docker on that host, or manage services yourself (systemd) |
+
+Step 1 applies to all three; step 2 has a section for each. None of them involve
+`deploy.sh` — see [Deployment](#deployment) for what that script is actually for.
 
 #### 1. Configure
 
-The container is configured through the same `TRILIUM_*` variables as above,
-plus:
+The server is configured through the same `TRILIUM_*` variables as above, plus:
 
 | Key | Description |
 |---|---|
-| `MCP_TRANSPORT` | `stdio` (default) or `streamable-http` |
-| `MCP_HOST` / `MCP_PORT` | Bind address inside the container (default `127.0.0.1:8000`; the image sets `0.0.0.0`) |
+| `MCP_TRANSPORT` | `stdio` (default) or `streamable-http` — the one variable that selects the mode |
+| `MCP_HOST` / `MCP_PORT` | Address the server binds to (default `127.0.0.1:8000`; the image sets `0.0.0.0` so the port can be published) |
 | `MCP_PATH` | Endpoint path (default `/mcp`) |
 | `MCP_AUTH_TOKEN` | If set, clients must send `Authorization: Bearer <token>`. Unset means **no authentication** |
 | `MCP_ALLOWED_HOSTS` | Comma-separated hostnames accepted by the SDK's DNS-rebinding protection. Required when reached through a reverse proxy under its own hostname |
@@ -197,41 +249,179 @@ The same applies one level down: setting `MCP_ALLOWED_HOSTS` but leaving
 rejected with `403`, while requests without one pass. Browser-based clients
 therefore need both.
 
-#### 2. Build and run
+One consequence catches people out in every variant below: setting
+`MCP_ALLOWED_HOSTS` *replaces* the SDK's localhost defaults rather than adding to
+them. With only the proxy hostname listed, a `curl` against `127.0.0.1:9151` on
+the host — the obvious way to check the endpoint before the proxy is in place —
+answers `421` even though nothing is wrong. **Whatever host and port a client
+actually connects to has to appear in the list**, which is why the examples below
+carry the localhost entries alongside the proxy name; drop them once you no
+longer test that way.
 
-The build needs BuildKit — the `Dockerfile` uses `COPY --chmod=644`, which the
-legacy builder rejects. Any current Docker with the `buildx` plugin installed
+`MCP_PATH` is set to `/trilium-notecast-mcp` in the examples to match the path
+the reverse proxy mounts the server under; the image's own default is `/mcp`.
+Whichever you pick, it has to be identical in the proxy config and in the client
+URL.
+
+#### 2. Run it
+
+Every Docker variant needs the image built first, because there is deliberately
+no `build:` key anywhere — the image is built once and referenced by tag, which
+is what lets the same service definition be deployed to a machine with no source
+checkout. The build needs BuildKit: the `Dockerfile` uses `COPY --chmod=644`,
+which the legacy builder rejects. Any current Docker with the `buildx` plugin
 (`docker buildx version` answers) provides it.
 
 ```bash
 docker build -t trilium-notecast-mcp:local .
-docker run -d --name trilium-notecast-mcp -p 127.0.0.1:9151:8000 \
-  -e TRILIUM_URL=http://trilium:8080 \
+```
+
+Rebuild with the same command after pulling a new version — compose and
+`docker run` both reference the `:local` tag, they never build it themselves.
+
+##### Variant A — Docker Compose
+
+The common case: Trilium already runs in a compose stack, and the MCP server
+joins it as a second service. Both containers then sit on one network, so the
+server reaches Trilium under its **service name** rather than over the host.
+
+[`deploy/docker-compose.snippet.yml`](deploy/docker-compose.snippet.yml) is the
+full service definition, with resource limits and a hardened container
+(`read_only`, `cap_drop: ALL`, `no-new-privileges`). Paste it into the compose
+file that runs Trilium — it is indented to drop straight under `services:` — and
+adjust the four things its header comment names: the Trilium service name in
+`depends_on` and `TRILIUM_URL`, the published port, the hostnames in
+`MCP_ALLOWED_HOSTS` / `MCP_ALLOWED_ORIGINS`, and the network. In outline:
+
+```yaml
+  trilium-notecast-mcp:
+    image: trilium-notecast-mcp:local   # built above; no build: key on purpose
+    pull_policy: never                  # local-only image; see below
+    restart: always
+    depends_on:
+      - triliumnext
+    ports:
+      - "127.0.0.1:9151:8000"           # localhost only — the proxy exposes it
+    env_file:
+      - ./.env.trilium-notecast-mcp     # ETAPI + bearer token, never committed
+    environment:
+      - TRILIUM_URL=http://triliumnext:8080   # service name, not localhost
+      - MCP_TRANSPORT=streamable-http
+      - MCP_HOST=0.0.0.0
+      - MCP_PATH=/trilium-notecast-mcp
+      - MCP_ALLOWED_HOSTS=mcp.example.net,127.0.0.1:9151,localhost:9151
+    networks:
+      - web                             # the network Trilium is already on
+```
+
+The secrets go into `.env.trilium-notecast-mcp` next to the compose file —
+[`deploy/env.example`](deploy/env.example) is the template, and it is referenced
+by `env_file:` rather than written into the compose file so the tokens stay out
+of version control. Then:
+
+```bash
+docker compose up -d trilium-notecast-mcp
+docker compose logs -f trilium-notecast-mcp
+```
+
+Three things to get right, all of which fail in confusing ways:
+
+- **`pull_policy: never` is not cosmetic.** The image is built locally — by
+  `docker build` here, or by [`deploy.sh`](#deployment) straight onto the server
+  — and no registry ever holds it. Without that key, `docker compose pull` fails
+  on this service with *"pull access denied"*, and because compose treats that as
+  fatal, the whole stack's pull is aborted along with it.
+- **The network must be one the stack already declares**, and the same one
+  Trilium is on — otherwise compose fails with *"network web not found"*, or the
+  service name in `TRILIUM_URL` does not resolve. If the stack uses only its
+  implicit default network, drop the `networks:` key entirely.
+- **`MCP_HOST=0.0.0.0` belongs here**, unlike in variant C: the process must
+  listen on the container's external interface for the published port to reach
+  it. Confining the exposure is the job of the `127.0.0.1:` prefix in `ports:`.
+
+##### Variant B — `docker run`
+
+A single container, without a stack — the quickest way to try the HTTP mode:
+
+```bash
+docker run -d --name trilium-notecast-mcp \
+  --network your-trilium-network \
+  -p 127.0.0.1:9151:8000 \
+  -e TRILIUM_URL=http://triliumnext:8080 \
   -e TRILIUM_API_KEY=your-etapi-token \
   -e MCP_AUTH_TOKEN=your-bearer-token \
   -e MCP_PATH=/trilium-notecast-mcp \
-  -e MCP_ALLOWED_HOSTS=mcp.example.net \
+  -e MCP_ALLOWED_HOSTS=mcp.example.net,127.0.0.1:9151,localhost:9151 \
   trilium-notecast-mcp:local
 ```
 
-`MCP_PATH` is set here to match the path the reverse proxy mounts the server
-under further below; the image's own default is `/mcp`. Whichever you pick, it
-has to be the same in the proxy config and in the client URL.
+**`--network` is not optional if `TRILIUM_URL` names a container.** Without it
+the container lands on the default bridge, where a service name does not resolve
+— and the failure is quiet: the server starts, `/healthz` answers `ok`, the
+`HEALTHCHECK` reports healthy and an MCP `initialize` succeeds, because none of
+those touch Trilium. Only the first real tool call fails. `docker network ls`
+shows the network your Trilium stack created (typically `<stack>_web` or
+`<stack>_default`). If Trilium instead runs on the host, use
+`-e TRILIUM_URL=http://host.docker.internal:8080` with
+`--add-host=host.docker.internal:host-gateway` and no `--network`.
+
+##### Variant C — virtualenv, no Docker
+
+The HTTP transport is not tied to the container: `uvicorn` is one of the three
+direct dependencies, so the virtualenv from [Local (stdio)](#local-stdio) already
+has everything. Install exactly as in that section, then start `server.py` with
+the transport variable set instead of letting a client spawn it:
+
+```bash
+MCP_TRANSPORT=streamable-http \
+MCP_HOST=127.0.0.1 MCP_PORT=9151 MCP_PATH=/trilium-notecast-mcp \
+TRILIUM_URL=http://localhost:8080 \
+TRILIUM_API_KEY=your-etapi-token \
+MCP_AUTH_TOKEN=your-bearer-token \
+  venv/bin/python server.py
+```
+
+The endpoint behaves identically to the container — same bearer check, same
+`/healthz`, same DNS-rebinding rules. Two differences are worth knowing:
+
+- **Binding.** The image sets `MCP_HOST=0.0.0.0` because a container publishes
+  its port outward. Running on the host directly, keep the `127.0.0.1` default
+  and let the reverse proxy do the exposing — `0.0.0.0` here puts the endpoint on
+  every interface of the machine.
+- **Nothing restarts it.** The container brings `restart: always` and a
+  `HEALTHCHECK` that together recover a server which is up but no longer
+  answering. Run it from the virtualenv and that is your job — a systemd unit
+  with `Restart=always` is the usual answer, and it can probe the same
+  `GET /healthz` the image uses.
+
+#### 3. Expose it, whichever variant you picked
 
 `GET /healthz` answers `ok` without authentication, whether or not
-`MCP_AUTH_TOKEN` is set — it is handled by its own middleware layer outside the
-bearer check. That is what `deploy.sh` probes and what the image's `HEALTHCHECK`
-uses, so `restart: always` also recovers a server that is up but has stopped
-answering. The MCP endpoint itself has no transport-level encryption — put it
-behind a reverse proxy (nginx, `tailscale serve`, …) and publish the container
-port on localhost only.
+`MCP_AUTH_TOKEN` is set — it is handled by its own middleware layer outside both
+the bearer check and the host check. That is what the image's `HEALTHCHECK` uses
+(so `restart: always` also recovers a server that is up but has stopped
+answering), and it is why a container can report *healthy* while every MCP
+request is being rejected — a green health status says the process is alive, not
+that the endpoint is reachable or that Trilium is.
 
-Note that reaching the endpoint means full access to the Trilium instance, not
-just to presentations: Trilium has no user management, so an ETAPI token covers
-every note, and `MCP_AUTH_TOKEN` is the only check in front of it. See
+The MCP endpoint has no transport-level encryption of its own, so publish the
+port on localhost only and put a reverse proxy in front. With Tailscale, a path
+mount keeps an existing service on `/` untouched:
+
+```bash
+tailscale serve --bg --set-path=/trilium-notecast-mcp http://127.0.0.1:9151/trilium-notecast-mcp
+```
+
+The path is the one the server serves under (`MCP_PATH`), and the hostname the
+proxy answers on must appear in `MCP_ALLOWED_HOSTS` — otherwise every proxied
+request comes back as `421 Invalid Host header`.
+
+Reaching the endpoint means full access to the Trilium instance, not just to
+presentations: Trilium has no user management, so an ETAPI token covers every
+note, and `MCP_AUTH_TOKEN` is the only check in front of it. See
 [Security model](#security-model) for what that implies for where to run it.
 
-#### 3. Register the endpoint in your MCP client
+#### 4. Register the endpoint in your MCP client
 
 Unlike stdio, the client is given a URL instead of a command — paste this into
 the same config location listed above for your client:
@@ -415,25 +605,31 @@ re-pinning the previous image tag (see [Deployment](#deployment)).
 
 ## Deployment
 
-Only relevant for the shared HTTP mode, and only when the container runs on a
-different machine than the one you develop on — a local install needs none of
-this.
+**Optional convenience — skip it unless this is your case.** It covers one
+narrow situation: [variant A](#variant-a--docker-compose) where the stack runs on
+a *different* machine than the one you develop on, and you would rather not push
+the image through a registry or keep a source checkout on the server. Everything
+in [Setup](#setup) works without this section; `deploy.sh` adds no capability,
+only convenience.
 
-`deploy.sh` deploys from a dev machine to a server without a registry and
-without a source checkout on the server: the image is built by the *remote*
-Docker daemon through an SSH context, and the build context is streamed over
-that connection (kept small by `.dockerignore`).
+What it automates is the tedious part of that one case: create a Docker context
+over SSH, build the image on the *remote* daemon — the build context is streamed
+across that connection, kept small by `.dockerignore` — then `docker compose up
+-d` and poll `/healthz`. Each of those is a command you can run yourself. That
+remote build is the whole point: it is what makes a source checkout on the server
+unnecessary.
 
-**On a new server, do [Server-side setup](#server-side-setup) first.** `deploy.sh`
-builds the image and then runs `docker compose up -d` against a compose file it
-expects to be there already — it never creates one. Run it before that file and
-its `.env.trilium-notecast-mcp` exist and the build succeeds, then the recreate
-step fails on the missing service. The order for a first deployment is:
+**Set the server side up first.** `deploy.sh` runs `docker compose up -d` against
+a compose file it expects to be there already — it never creates one, and it
+never deploys secrets. Both are exactly the files from
+[variant A](#variant-a--docker-compose), placed on the server by hand; see
+[Server-side setup](#server-side-setup) for the ownership rationale. The order
+for a first deployment is:
 
-1. [Server-side setup](#server-side-setup) — compose snippet and secrets, once, by hand
+1. Compose snippet and `.env.trilium-notecast-mcp` on the server, once, by hand
 2. `deploy.env` on the dev machine (below)
 3. `./deploy.sh`
-4. The reverse proxy (end of the server-side section)
+4. The reverse proxy ([step 3 of the setup](#3-expose-it-whichever-variant-you-picked))
 
 The division of responsibility is deliberate — the service definition
 (`docker-compose.yml`) and the secrets (`.env.trilium-notecast-mcp`) live on the
@@ -495,31 +691,34 @@ would be expanded on the server, where they are not set either.
 
 ### Server-side setup
 
-The two files that live on the server are not deployed — set them up once by
-hand, from the templates in `deploy/`:
+Nothing changes about *what* goes on the server — it is the same two files as in
+[variant A](#variant-a--docker-compose), from the same templates:
 
 | Template | Goes to | Purpose |
 |---|---|---|
 | `deploy/docker-compose.snippet.yml` | pasted into the compose file that runs Trilium | service definition |
 | `deploy/env.example` | next to that compose file, as `.env.trilium-notecast-mcp` | ETAPI + bearer token |
 
-They are templates rather than deployed files on purpose: the secrets never
-leave the server, and the compose file stays under the server admin's control.
-Keep the templates in sync when the service definition changes — nothing
-enforces it.
+What is specific to deploying remotely is that `deploy.sh` deliberately does
+*not* deploy them. They are templates, placed by hand, so that the secrets never
+leave the server and the compose file stays under the server admin's control —
+the deploy only replaces the image and recreates the container. The practical
+consequence: the admin can operate the service (`up -d`, `restart`, `logs`)
+without this repository, and no secret ever sits on a dev machine. The cost is
+that `deploy/` holds *copies* that nothing keeps in sync — update them when the
+service definition changes.
 
-Finally, expose the port through a reverse proxy. With Tailscale, a path mount
-keeps an existing service on `/` untouched:
+One consequence is easy to miss when the stack is maintained by hand: the image
+this deploy produces exists **only** in the server's local image store, so the
+service definition has to carry `pull_policy: never` — it is in the snippet, and
+it needs to survive into the compose file the snippet was pasted into. Otherwise
+the admin's routine `docker compose pull` fails on this service and takes the
+pull for every other service in the stack down with it. `deploy.sh` itself is
+unaffected either way: it only runs `up -d`, which is content with a local
+image.
 
-```bash
-tailscale serve --bg --set-path=/trilium-notecast-mcp http://127.0.0.1:9151/trilium-notecast-mcp
-```
-
-The path there is the one the container serves under (`MCP_PATH`, set to
-`/trilium-notecast-mcp` in the compose snippet). The hostname must appear in
-`MCP_ALLOWED_HOSTS` — since the snippet sets that variable, DNS-rebinding
-protection is active, and a hostname missing from the list is answered with
-`Invalid Host header`.
+The reverse proxy is set up the same way as for any other variant — see
+[step 3](#3-expose-it-whichever-variant-you-picked).
 
 ## Content Organization
 

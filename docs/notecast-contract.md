@@ -1,9 +1,11 @@
 # Notecast — Shared Label Contract
 
-Status: **MCP side implemented**, **slide type migrated** — the binding agreement
-between the repos below. The `trilium-notecast-mcp` server (this repo) implements
-its half, and the Slide Format note in Trilium carries the full `#notecast…` type
-definition. The render plugin is still a scaffold. See Migration.
+Status: **implemented on all three sides** — the binding agreement between the
+repos below. The `trilium-notecast-mcp` server (this repo) implements its half,
+the Slide Format note in Trilium carries the full `#notecast…` type definition,
+and `trilium-notecast-render` reads `#notecastInstance` / `#notecastTheme` /
+`#notecastIgnore` and ships the seven document types. What is left is
+publication, not implementation — see Migration.
 
 ## What Notecast is
 
@@ -14,7 +16,7 @@ notes** but each does exactly one job:
 | --- | --- | --- | --- |
 | `trilium-notecast-mcp` (this repo) | **Authoring** — an AI assistant creates/modifies typed notes via ETAPI | type definitions | notes of a type |
 | `trilium-presenter-plugin` (public) | **Presenting** — renders a subtree as an on-screen slide deck | slide notes + themes | — |
-| `trilium-notecast-render` (new) | **Rendering** — renders a marked note to print/PDF in a chosen theme | notes + themes | — |
+| `trilium-notecast-render` | **Rendering** — renders a marked note to print/PDF in a chosen theme | notes + themes | — |
 
 The glue between them is a set of Trilium labels sharing the `notecast` prefix.
 `notecast` is **only a label namespace and a family name** — it is not required
@@ -85,7 +87,7 @@ A **theme** is one note carrying a CSS stylesheet for a type.
 | Element | Meaning |
 | --- | --- |
 | `#notecastTheme=<typeId>` | Marks the note as a theme and binds it to a type. |
-| note **title** | The theme's name, shown in the renderer's picker — e.g. `A4 Print`, `A4 Compact`. |
+| note **title** | The theme's name, shown in the renderer's picker — e.g. `A4 Note`, `US Letter Note`. |
 | note **content** | The CSS. |
 
 **Themes are not shared between the presenter and the renderer — each keeps its
@@ -131,8 +133,41 @@ on paper.
 
 The expectation that it would not comes from the presenter's own handout, which
 did honour the label. That handout is gone; printing belongs to the renderer
-now. Teaching the renderer an equivalent would make this a shared label — a
-change to this document, to be decided here rather than in either widget.
+now. That left the renderer with no way to exclude anything at all, which has
+since been decided — and **not** by teaching it this label: print exclusion is
+`#notecastIgnore`, below.
+
+### Print exclusion — read by the renderer
+
+| Label | Owner | Shape |
+| --- | --- | --- |
+| `#notecastIgnore` | `trilium-notecast-render` | keep a note out of a subtree print — bare on the note itself, or `#notecastIgnore=subtree` for its whole branch |
+
+Shape-identical to `#slideIgnore` on purpose, and deliberately **not the same
+label**. Sharing one would get the paradigm case backwards: the canonical
+`#slideIgnore` note is a "Handouts" or "Notes" folder parked beside the slides,
+kept off screen precisely *because* it belongs on paper. A renderer honouring
+`#slideIgnore` would suppress exactly the branch the print job exists for.
+"Not a slide" and "not for print" are different statements about a note, so they
+get different labels — and a note that means both simply carries both.
+
+Three rules govern the walk:
+
+- **Bare removes the note, not its descendants.** Its children are still walked
+  and printed. That is what makes the label usable on a container: a folder can
+  be kept off paper without hiding what it holds.
+- **`=subtree` removes the branch**, the note included. Any other value reads as
+  bare, matching the presenter.
+- **The note Print was pressed on is exempt.** Its own `#notecastIgnore` does not
+  apply to itself, only to what hangs below it. The renderer's root is chosen by
+  hand — a note selected, a button pressed — where the presenter's is whatever
+  deck it was opened on. An explicit act beats a passive marker, and the
+  alternative is answering a deliberate Print with "Nothing to print", which
+  reads as a broken plugin rather than as a label doing its job. For the same
+  reason a single-note print never consults the label at all.
+
+The MCP does not read it. It can of course stamp it through `#notecastApplyLabels`
+like any other label, but it has no logic of its own for it.
 
 ### Instance marker — written by the MCP, read by the renderer
 
@@ -287,7 +322,9 @@ is introduced:
 | `kbEntry` | `trilium-notecast-render` | `code` / `text/x-markdown` | a durable reference article |
 | `meetingNote` | `trilium-notecast-render` | `code` / `text/x-markdown` | minutes of one meeting |
 | `checklist` | `trilium-notecast-render` | `code` / `text/x-markdown` | steps to tick off on paper |
+| `itTip` | `trilium-notecast-render` | `code` / `text/x-markdown` | one problem, one fix, one page |
 | `letter` | `trilium-notecast-render` | `text` (HTML) | formal letter, window-envelope geometry |
+| `handout` | `trilium-notecast-render` | `code` / `text/x-markdown` | course material to take home; the one type written to run past a single sheet |
 
 The renderer owns the general-purpose document types because it is the general-
 purpose output: anything can be printed, whereas `slide` only means something to
@@ -300,8 +337,11 @@ a presenter. A type belongs to whichever plugin gives it a visible form.
   `#notecastApplyLabels=slideType=content`, `#notecastPrefix=Folie`), applied by
   `trilium-presenter-plugin/migrate-slide-type-to-notecast.py`. The migration is
   additive: the legacy `#presenterSlideFormat` label is still on the note and can
-  be dropped once the MCP is verified end to end. Still to do: re-export
-  `meta.json` from Trilium so the presenter's import zip carries the new labels.
+  be dropped once the MCP is verified end to end.
+- **Done:** the presenter's import zip carries the new labels. The exported
+  `meta.json` that would have had to be refreshed by hand is gone from both
+  plugin repos — `build-zip.py` now declares the note tree and emits the archive
+  and its metadata together, so the labels cannot drift out of a release again.
 - **Themes: deliberately not migrated, and never will be.** The presenter's
   on-screen themes stay on `#presenterTheme`; `#notecastTheme` belongs to the
   renderer. This is settled — see "Theme definition" above for the reasoning.
