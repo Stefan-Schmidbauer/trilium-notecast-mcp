@@ -10,7 +10,7 @@ respx==0.23.1
 ruff==0.16.2
 
 # Regenerates requirements.txt with hashes — see README, section "Dependencies".
-pip-tools==7.6.0
+pip-tools==7.6.1
 
 # Reports known CVEs against the pinned production set.
 pip-audit==2.9.0
