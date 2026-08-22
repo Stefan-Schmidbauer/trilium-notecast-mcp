@@ -56,6 +56,12 @@ mcp = FastMCP("trilium-notecast")
 # `_fetch_type_definition`), where plain tokens cannot inject search operators.
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]+\Z")
 
+# Trilium attribute names are [A-Za-z0-9_] only — a `:` is reserved for its own
+# promoted-attribute definitions (`label:foo`). Validating here rather than
+# letting ETAPI reject it keeps the failure legible: the caller is a model, and
+# "invalid label name" beats a 400 with Trilium's internal wording.
+_LABEL_NAME_RE = re.compile(r"^[A-Za-z0-9_]+\Z")
+
 # One pooled client for the process. Every ETAPI call went through a fresh
 # connection before, which meant a TCP (and TLS) handshake per request — and a
 # cold tools/list makes dozens of them. httpx.Client is thread-safe, which
@@ -222,6 +228,50 @@ MECH_PREFIX = "notecastPrefix"            # branch prefix for created notes
 # so keep them to plain tokens — they cannot then inject search operators. Same
 # shape as an entity ID, so the same compiled pattern; see _ID_RE.
 _TYPE_ID_RE = _ID_RE
+
+
+# Labels a caller may never set through `labels`. Both are the MCP's own
+# bookkeeping and breaking either is silent, not loud:
+#   notecastInstance — the render plugin resolves a note's type from it, so a
+#     wrong value offers the wrong themes and a missing one falls back to "all".
+#   notecastType     — would turn the created note into a *second* definition of
+#     that type, and the ambiguity guard then refuses every later create_note
+#     for it. One stray label would take the type offline.
+_RESERVED_LABELS = (INSTANCE_LABEL, TYPE_LABEL)
+
+
+def _validate_labels(labels: dict[str, str] | None) -> str | None:
+    """Reject a bad `labels` mapping, or return None if it is usable.
+
+    Returns the message to hand back to the caller; nothing is created when it
+    is not None. Refusing beats silently dropping a label — an author who asked
+    for `slideType=title` and got a content slide has no way to tell why.
+    """
+    if not labels:
+        return None
+    if not isinstance(labels, dict):
+        return "⚠️ labels must be an object mapping label name to value."
+    for name, value in labels.items():
+        if not isinstance(name, str) or not _LABEL_NAME_RE.match(name):
+            return (
+                f"⚠️ INVALID LABEL NAME '{name}' — nothing was created.\n"
+                "Trilium attribute names may contain only letters, digits and "
+                "underscores."
+            )
+        if name in _RESERVED_LABELS:
+            return (
+                f"⚠️ LABEL '{name}' IS RESERVED — nothing was created.\n"
+                f"#{INSTANCE_LABEL} is set from `note_type` and is how the render "
+                f"plugin resolves a note's type; #{TYPE_LABEL} marks a type "
+                "*definition* and would make this note a duplicate one, taking the "
+                "type offline for every later create_note."
+            )
+        if not isinstance(value, str):
+            return (
+                f"⚠️ LABEL '{name}' HAS A NON-STRING VALUE — nothing was created.\n"
+                "Use \"\" for a bare label."
+            )
+    return None
 
 
 def _type_unavailable_notice(type_id: str) -> str:
@@ -408,6 +458,7 @@ def create_note(
     title: str,
     content: str,
     parent_note_id: str | None = None,
+    labels: dict[str, str] | None = None,
 ) -> str:
     """Create a note of a given type.
 
@@ -425,9 +476,21 @@ def create_note(
         content: The note body, in the type's format.
         parent_note_id: Parent note ID. Defaults to the type's #notecastParent,
                         else the configured default parent.
+        labels: Extra labels for this one note, as {name: value}; "" for a bare
+                label. Applied after the type's #notecastApplyLabels, so a name
+                given here overrides the type's default for that label. Use it
+                where a type has variants the type id does not distinguish —
+                a `slide` deck needs slideType=title on its first slide and
+                slideType=chapter on a section break, while the type stamps
+                slideType=content on every note it creates.
     Returns:
-        JSON with noteId, or a STOP notice if the type is unavailable/ambiguous.
+        JSON with noteId, or a STOP notice if the type is unavailable/ambiguous
+        or `labels` is not usable.
     """
+    # Validated before the type lookup: a bad mapping must not cost an ETAPI
+    # round trip, and must never leave a half-labelled note behind.
+    if (refusal := _validate_labels(labels)) is not None:
+        return refusal
     fmt, mechanics, source_id = _fetch_type_definition(note_type)
     if source_id is None or mechanics is None:
         return fmt  # loud do-not-guess / ambiguous notice — nothing created
@@ -452,6 +515,10 @@ def create_note(
         name, _sep, value = spec.partition("=")
         if name:
             _set_attribute(note_id, name, value)
+    # Last, so the caller's value replaces the type's default for the same name
+    # — _set_attribute patches an existing label rather than adding a second.
+    for name, value in (labels or {}).items():
+        _set_attribute(note_id, name, value)
     return json.dumps({"noteId": note_id, "title": title, "noteType": note_type})
 
 

@@ -258,3 +258,70 @@ def test_create_note_creates_nothing_when_the_type_does_not_resolve(
     assert marker in out
     assert trilium.created == [], "a STOP notice must not be accompanied by a note"
     assert trilium.attributes_set == []
+
+
+# ── create_note(labels=…) ────────────────────────────────────────────────────
+# The type's #notecastApplyLabels is one fixed value per type, so a type whose
+# id does not distinguish its variants was unreachable through the MCP: `slide`
+# defines title / content / chapter, the type stamps `content`, and there was no
+# way to author the other two. `labels` is that way, and it has to win over the
+# type default rather than sit beside it — two `slideType` labels on one note
+# would make the rendered layout depend on attribute order.
+
+def test_labels_override_the_types_apply_labels(server, slide_type):
+    result = json.loads(
+        server.create_note("slide", "Titel", "# Titel", labels={"slideType": "title"}))
+
+    assert slide_type.labels_on(result["noteId"])["slideType"] == "title"
+    # Patched in place rather than added beside the type's default: two
+    # `slideType` labels would make the layout depend on attribute order.
+    assert len(slide_type.attributes_named(result["noteId"], "slideType")) == 1
+    assert slide_type.attributes_patched != []
+
+
+def test_labels_add_alongside_the_type_defaults(server, slide_type):
+    result = json.loads(
+        server.create_note("slide", "Folie", "# Folie", labels={"notecastIgnore": ""}))
+
+    labels = slide_type.labels_on(result["noteId"])
+    assert labels["notecastIgnore"] == ""
+    assert labels["slideType"] == "content"     # untouched
+    assert labels["notecastInstance"] == "slide"
+
+
+def test_omitting_labels_changes_nothing(server, slide_type):
+    result = json.loads(server.create_note("slide", "Folie", "# Folie"))
+
+    assert slide_type.labels_on(result["noteId"])["slideType"] == "content"
+
+
+@pytest.mark.parametrize("name", ["notecastInstance", "notecastType"])
+def test_reserved_labels_are_refused_and_nothing_is_created(server, slide_type, name):
+    out = server.create_note("slide", "Folie", "# Folie", labels={name: "letter"})
+
+    assert "RESERVED" in out
+    assert slide_type.created == []
+
+
+@pytest.mark.parametrize("name", ["slide:type", "slide type", "slide-type", "", "a.b"])
+def test_invalid_label_names_are_refused_and_nothing_is_created(server, slide_type, name):
+    out = server.create_note("slide", "Folie", "# Folie", labels={name: "x"})
+
+    assert "INVALID LABEL NAME" in out
+    assert slide_type.created == []
+
+
+def test_a_non_string_value_is_refused(server, slide_type):
+    out = server.create_note("slide", "Folie", "# Folie", labels={"slideType": 3})
+
+    assert "NON-STRING VALUE" in out
+    assert slide_type.created == []
+
+
+def test_labels_are_validated_before_the_type_is_looked_up(server, trilium):
+    """A bad mapping must not cost an ETAPI round trip — and must not half-create."""
+    out = trilium and server.create_note(
+        "nosuchtype", "X", "# X", labels={"bad name": "x"})
+
+    assert "INVALID LABEL NAME" in out
+    assert trilium.created == []

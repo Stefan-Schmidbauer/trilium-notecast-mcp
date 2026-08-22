@@ -75,6 +75,34 @@ given type.
 | `#notecastParent=<noteId>` | Default parent for created notes of this type. Falls back to the caller's argument / `TRILIUM_DEFAULT_PARENT`. | no |
 | `#notecastPrefix=<branchPrefix>` | Branch prefix for created notes (the old slides used `Folie`). | no |
 
+#### Per-note labels
+
+`#notecastApplyLabels` is **one fixed value per type**, which leaves a type whose
+id does not distinguish its variants unreachable: `slide` has three of them —
+`title`, `content`, `chapter` — the definition stamps `slideType=content`, and
+before `labels` there was no way to author the other two. Every deck created
+through the MCP therefore had no title slide until someone edited the label by
+hand in Trilium, and the MCP had no tool to do that either.
+
+`create_note(..., labels={"slideType": "title"})` closes that. The mapping is
+applied **after** `#notecastApplyLabels`, so a name given there replaces the
+type's default rather than sitting beside it — two `slideType` labels on one
+note would make the rendered layout depend on attribute order.
+
+Note what this is *not*: the presenter's position-based fallback (first slide in
+a deck becomes `title`) is deliberately dead, because the same note then rendered
+as a title slide in a deck and as a content slide on its own. Naming the type on
+every note is the fix for that; `labels` is what lets the MCP name it too.
+
+Two labels are refused, and nothing is created when they appear:
+
+| Label | Why |
+| --- | --- |
+| `#notecastInstance` | the renderer resolves a note's type from it; a wrong value silently offers the wrong themes |
+| `#notecastType` | would make the created note a *second* definition of that type, and the ambiguity guard then refuses every later `create_note` for it |
+
+Names are validated against `[A-Za-z0-9_]+` — Trilium's own attribute grammar.
+
 The note's **content** is the authoring format — the prose the model must
 follow (structure, conventions, voice). It is injected live into the
 `create_note` / `update_note` tool descriptions, exactly as the old
@@ -261,7 +289,7 @@ traversal is gone.
 
 | New | Replaces | Notes |
 | --- | --- | --- |
-| `create_note(note_type, title, content, parent?)` | `create_slide` / `create_presentation` | Reads the type definition, sets `#notecastApplyLabels`, target type, mime, prefix. |
+| `create_note(note_type, title, content, parent?, labels?)` | `create_slide` / `create_presentation` | Reads the type definition, sets `#notecastApplyLabels`, target type, mime, prefix. `labels` overrides those defaults for one note — see "Per-note labels" below. |
 | `update_note(note_id, content?, title?)` | `update_slide` | |
 | `attach_image(note_id, filename, data_base64, alt?, mime?)` | — (new) | Attaches an image to an existing note and returns the reference to embed. See "Images" above. |
 | `get_note(note_id)` | `get_slide` | |

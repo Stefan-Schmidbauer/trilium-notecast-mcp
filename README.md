@@ -42,7 +42,7 @@ first, `tools/seed-demo-type.py` tags one throwaway type and removes it again.
 | Tool | Description |
 |---|---|
 | `list_note_types` | List the available types (`#notecastType` notes) |
-| `create_note` | Create a note of a type (format loaded live into this description) |
+| `create_note` | Create a note of a type (format loaded live into this description); `labels` sets per-note labels |
 | `get_note` | Read a note's raw content |
 | `update_note` | Update a note's content and/or title |
 | `attach_image` | Attach an image to a note and get back the reference to embed |
@@ -57,6 +57,15 @@ first, `tools/seed-demo-type.py` tags one throwaway type and removes it again.
 with the target type / mime / branch prefix it specifies and stamps its
 `#notecastApplyLabels`. If `note_type` does not resolve to exactly one
 definition it refuses and returns a STOP notice instead of creating anything.
+
+The optional `labels={name: value}` sets labels on that one note, applied after
+`#notecastApplyLabels` so a name given there overrides the type's default. It
+exists because that default is one fixed value per type, which left a type whose
+id does not distinguish its variants unreachable: `slide` has `title`, `content`
+and `chapter`, the definition stamps `content`, and no deck authored here could
+have a title slide. `#notecastInstance` and `#notecastType` are refused — the
+first is how the renderer resolves a note's type, the second would turn the note
+into a duplicate type definition and take that type offline.
 `list_children` is plain navigation — the MCP authors notes; **presenting** a
 subtree is the presenter plugin's job, not this server's.
 

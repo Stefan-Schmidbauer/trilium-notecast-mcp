@@ -59,6 +59,7 @@ class FakeTrilium:
         self.content_calls: list[str] = []
         self.created: list[dict] = []
         self.attributes_set: list[dict] = []
+        self.attributes_patched: list[dict] = []
         # Attachments keyed by attachmentId. `content_writes` records the raw
         # body *and* the Content-Type of every write, because the Content-Type is
         # the part that decides whether Trilium stores the bytes or mangles them.
@@ -113,6 +114,8 @@ class FakeTrilium:
         respx_mock.get(path="/etapi/notes").mock(side_effect=self._search_route)
         respx_mock.post(path="/etapi/create-note").mock(side_effect=self._create_route)
         respx_mock.post(path="/etapi/attributes").mock(side_effect=self._attribute_route)
+        respx_mock.patch(path__regex=r"^/etapi/attributes/(?P<aid>[^/]+)$").mock(
+            side_effect=self._attribute_patch_route)
         respx_mock.post(path="/etapi/attachments").mock(side_effect=self._attachment_create_route)
         respx_mock.put(path__regex=r"^/etapi/attachments/(?P<aid>[^/]+)/content$").mock(
             side_effect=self._attachment_content_route)
@@ -162,6 +165,28 @@ class FakeTrilium:
             {"type": "label", "name": body["name"], "value": body.get("value", ""),
              "attributeId": f"attr{len(self.attributes_set):02d}"})
         return httpx.Response(201, json={"attributeId": f"attr{len(self.attributes_set):02d}"})
+
+    def _attribute_patch_route(self, request, aid):
+        """ETAPI updates a label's value in place; the attributeId survives.
+
+        `_set_attribute` takes this branch whenever the label already exists,
+        which is how `create_note(labels=…)` overrides a type's
+        #notecastApplyLabels default without leaving two labels of the same name
+        behind. Without this route the double answered 404 and the override path
+        was never exercised.
+        """
+        body = json.loads(request.content)
+        for note in self.notes.values():
+            for attr in note["attributes"]:
+                if attr.get("attributeId") == aid:
+                    attr["value"] = body.get("value", "")
+                    self.attributes_patched.append({"attributeId": aid, **body})
+                    return httpx.Response(200, json=attr)
+        return httpx.Response(404, json={"message": f"no attribute {aid}"})
+
+    def attributes_named(self, note_id: str, name: str) -> list[dict]:
+        """Every label with this name — a dict view would hide a duplicate."""
+        return [a for a in self.notes[note_id]["attributes"] if a["name"] == name]
 
     def labels_on(self, note_id: str) -> dict[str, str]:
         return {a["name"]: a["value"] for a in self.notes[note_id]["attributes"]}
