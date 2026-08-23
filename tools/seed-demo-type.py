@@ -32,6 +32,14 @@ PARENT = os.environ.get("TRILIUM_DEFAULT_PARENT", "root")
 TYPE_ID = "demoNote"
 TITLE = "Demo Note — Notecast type (safe to delete)"
 
+ATTRIBUTES = {
+    "notecastType": TYPE_ID,
+    "notecastTargetType": "code",
+    "notecastMime": "text/x-markdown",
+    "notecastApplyLabels": "demoMarker=yes",
+    "notecastPrefix": "Demo",
+}
+
 FORMAT = """# Demo Note
 
 A throwaway type for checking that the engine resolves types and applies
@@ -44,14 +52,19 @@ mechanics. Created as a Trilium **code** note with mime `text/x-markdown`.
 ## Conventions & Voice
 Language and tone are NOT fixed here. If the author has not said which to use,
 ask — do not guess.
-"""
 
-MECHANICS = {
-    "notecastTargetType": "code",
-    "notecastMime": "text/x-markdown",
-    "notecastApplyLabels": "demoMarker=yes",
-    "notecastPrefix": "Demo",
-}
+## Attributes
+
+The labels this definition carries — the contract's convention, so a definition
+says in its content what makes it one.
+
+| Label | Value |
+|---|---|
+""" + "\n".join(f"| `#{name}` | `{value}` |" for name, value in ATTRIBUTES.items()) + "\n"
+# The table is rendered from ATTRIBUTES rather than typed beside it: the plugins
+# parse their table to get the labels, and this script has no file to parse — so
+# it generates the other way round, from the dict it stamps. Same single source,
+# opposite direction.
 
 
 def headers() -> dict:
@@ -100,7 +113,7 @@ def main() -> None:
         r.raise_for_status()
         note_id = r.json()["note"]["noteId"]
 
-        for name, value in {"notecastType": TYPE_ID, **MECHANICS}.items():
+        for name, value in ATTRIBUTES.items():
             c.post(f"{URL}/etapi/attributes", headers=headers(), json={
                 "noteId": note_id, "type": "label", "name": name, "value": value,
             }).raise_for_status()

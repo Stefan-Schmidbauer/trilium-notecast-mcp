@@ -75,6 +75,36 @@ given type.
 | `#notecastParent=<noteId>` | Default parent for created notes of this type. Falls back to the caller's argument / `TRILIUM_DEFAULT_PARENT`. | no |
 | `#notecastPrefix=<branchPrefix>` | Branch prefix for created notes (the old slides used `Folie`). | no |
 
+#### A definition should state its own attributes
+
+A definition's labels are invisible in the only part of it anyone reads. The
+content is what Trilium shows, what GitHub renders, and what this server feeds to
+the model; the labels sit in the attribute panel beside it, and in the source
+repo they sat in a build script three files away. So the note someone copies to
+build a type of their own was the one place that never said which labels make it
+a type at all.
+
+Both output plugins therefore end a definition with an `## Attributes` section
+naming exactly what the note carries:
+
+```markdown
+## Attributes
+
+| Label | Value |
+|---|---|
+| `#notecastType` | `itTip` |
+| `#notecastTargetType` | `code` |
+| `#notecastMime` | `text/x-markdown` |
+```
+
+A label carried bare is written with an em dash in the value column.
+
+The MCP does not read this section — it reads the labels, as it always has, and
+a definition without one works exactly as before. The convention is for the human
+building the next type. What keeps it honest is that in both plugins the *build*
+parses this table and stamps the labels from it: the section cannot drift from
+the labels, because there is nothing left for it to drift from.
+
 #### Per-note labels
 
 `#notecastApplyLabels` is **one fixed value per type**, which leaves a type whose
