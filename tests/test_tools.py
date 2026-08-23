@@ -82,7 +82,8 @@ def test_all_tools_are_still_listed(server, trilium):
     assert names == {
         "list_note_types", "create_note", "get_note", "update_note",
         "attach_image", "get_note_info", "list_children", "clone_node",
-        "move_node", "delete_note", "search_notes",
+        "move_node", "move_to_parent", "unlink_branch", "set_labels",
+        "remove_label", "delete_note", "search_notes",
     }
 
 
@@ -163,4 +164,5 @@ def test_search_notes_returns_ids_and_titles(server, trilium):
 
     result = json.loads(server.search_notes("#notecastType"))
 
-    assert result == [{"noteId": "n1", "title": "Slide Format"}]
+    assert result == [{"noteId": "n1", "title": "Slide Format",
+                       "type": "code", "dateModified": None}]

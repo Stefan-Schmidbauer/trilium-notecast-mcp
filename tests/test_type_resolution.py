@@ -389,3 +389,284 @@ def test_only_the_branches_that_shift_are_written(server, deck):
     assert result["renumbered"] == 7
     assert {p["branchId"] for p in deck.branches_patched} == {
         f"deck_{n}" for n in "abcdefg"}
+
+
+# ── list_children: naming the branch ─────────────────────────────────────────
+# Reordering and unlinking both address a *placement*, not a note, so they need
+# a branchId. Getting one used to mean a `get_note_info` per child on top of the
+# listing. The id is derivable instead: parent and child each report the branches
+# they sit on, and the one they agree on is the branch joining them.
+
+def test_list_children_names_the_branch_of_each_child(server, trilium):
+    trilium.add_children("deck", "a", "b", "c")
+
+    children = json.loads(server.list_children("deck"))
+
+    assert [c["branchId"] for c in children] == ["deck_a", "deck_b", "deck_c"]
+
+
+def test_a_cloned_note_reports_the_branch_of_the_parent_being_listed(server, trilium):
+    """The case a note id alone cannot express: one slide in two decks.
+
+    Both listings are of the same note; handing back the same branch for both
+    would make `move_node` reorder whichever deck Trilium happened to name first.
+    """
+    trilium.add_children("master", "slide")
+    trilium.add_children("training", "slide")
+
+    under_master = json.loads(server.list_children("master"))
+    under_training = json.loads(server.list_children("training"))
+
+    assert under_master[0]["branchId"] == "master_slide"
+    assert under_training[0]["branchId"] == "training_slide"
+
+
+def test_naming_the_branch_costs_no_extra_request(server, trilium):
+    """One GET for the parent, one per child — the count before this field existed."""
+    trilium.add_children("deck", "a", "b", "c")
+    trilium.note_calls.clear()
+
+    server.list_children("deck")
+
+    assert trilium.note_calls == ["deck", "a", "b", "c"]
+
+
+def test_children_still_list_when_the_instance_omits_branch_ids(server, trilium):
+    """An ETAPI that reports no branch fields must not cost us the listing."""
+    trilium.add_children("deck", "a")
+    trilium.notes["deck"].pop("childBranchIds")
+    trilium.notes["a"].pop("parentBranchIds")
+
+    children = json.loads(server.list_children("deck"))
+
+    assert children[0]["branchId"] is None
+    assert children[0]["title"] == "a"
+
+
+# ── search_notes: type and age ───────────────────────────────────────────────
+
+def test_search_reports_type_and_date_modified(server, trilium):
+    trilium.add_type("s1", "A slide", "slide", "# A")
+    trilium.notes["s1"]["dateModified"] = "2026-03-31 11:36:58.293+0000"
+
+    hits = json.loads(server.search_notes("#notecastType=slide"))
+
+    assert hits[0]["type"] == "code"
+    assert hits[0]["dateModified"] == "2026-03-31 11:36:58.293+0000"
+
+
+def test_search_tolerates_an_instance_that_answers_with_bare_stubs(server, trilium):
+    """Older Trilium returns noteId and title only; the extra fields go null,
+    and the caller still gets its hits."""
+    trilium.add_type("s1", "A slide", "slide", "# A")
+    trilium.search_returns_attributes = False
+
+    hits = json.loads(server.search_notes("#notecastType=slide"))
+
+    assert hits == [{"noteId": "s1", "title": "A slide",
+                     "type": None, "dateModified": None}]
+
+
+# ── move_to_parent ───────────────────────────────────────────────────────────
+# Trilium has no "change the parent" call: placement lives on a branch and
+# `PATCH /branches` cannot rewrite parentNoteId. So a move is a create plus a
+# delete, and the guards below all exist because the delete half is destructive
+# when it lands on the wrong branch — or on the only one.
+
+def test_move_to_parent_refiles_the_note(server, trilium):
+    trilium.add_children("master", "slide")
+    trilium.add_children("training")
+
+    result = json.loads(server.move_to_parent("slide", "master", "training"))
+
+    assert trilium.order_under("master") == []
+    assert trilium.order_under("training") == ["slide"]
+    assert result["removedBranchId"] == "master_slide"
+
+
+def test_the_new_placement_is_written_before_the_old_one_is_removed(server, trilium):
+    """The reverse order can leave the note with no placement at all — which is
+    how Trilium spells "deleted"."""
+    trilium.add_children("master", "slide")
+    trilium.add_children("training")
+
+    server.move_to_parent("slide", "master", "training")
+
+    assert trilium.branches_created and trilium.branches_deleted
+    assert trilium.branches_deleted == ["master_slide"]
+
+
+def test_other_placements_of_a_clone_survive_the_move(server, trilium):
+    """One slide in three places; moving one of them must not disturb the rest."""
+    trilium.add_children("master", "slide")
+    trilium.add_children("courseA", "slide")
+    trilium.add_children("courseB")
+
+    server.move_to_parent("slide", "courseA", "courseB")
+
+    assert trilium.order_under("master") == ["slide"]
+    assert trilium.order_under("courseA") == []
+    assert trilium.order_under("courseB") == ["slide"]
+
+
+def test_position_places_the_note_among_its_new_siblings(server, trilium):
+    trilium.add_children("master", "slide")
+    trilium.add_children("training", "a", "b", "c")
+
+    server.move_to_parent("slide", "master", "training", position=1)
+
+    assert trilium.order_under("training") == ["a", "slide", "b", "c"]
+
+
+def test_a_move_from_a_parent_the_note_is_not_under_is_refused(server, trilium):
+    trilium.add_children("master", "slide")
+    trilium.add_children("elsewhere")
+    trilium.add_children("training")
+
+    result = server.move_to_parent("slide", "elsewhere", "training")
+
+    assert "NOT PLACED THERE" in result
+    assert trilium.branches_deleted == []
+    assert trilium.order_under("master") == ["slide"]
+
+
+def test_a_move_onto_the_same_parent_is_refused(server, trilium):
+    """The measured upsert makes this the dangerous one: creating the branch
+    returns the existing id, so deleting "the old one" would delete the only
+    placement the note has."""
+    trilium.add_children("master", "slide")
+
+    result = server.move_to_parent("slide", "master", "master")
+
+    assert "SAME PARENT" in result
+    assert trilium.branches_deleted == []
+    assert trilium.order_under("master") == ["slide"]
+
+
+def test_a_move_into_the_notes_own_subtree_is_refused(server, trilium):
+    """Would detach the whole subtree from the root while leaving it alive."""
+    trilium.add_children("root", "chapter")
+    trilium.add_children("chapter", "section")
+
+    result = server.move_to_parent("chapter", "root", "section")
+
+    assert "OWN SUBTREE" in result
+    assert trilium.branches_deleted == []
+
+
+def test_a_move_onto_itself_is_refused(server, trilium):
+    trilium.add_children("root", "chapter")
+
+    result = server.move_to_parent("chapter", "root", "chapter")
+
+    assert "OWN SUBTREE" in result
+    assert trilium.branches_deleted == []
+
+
+# ── unlink_branch ────────────────────────────────────────────────────────────
+
+def test_unlink_removes_one_placement_and_keeps_the_others(server, trilium):
+    trilium.add_children("master", "slide")
+    trilium.add_children("training", "slide")
+
+    result = json.loads(server.unlink_branch("training_slide"))
+
+    assert trilium.order_under("training") == []
+    assert trilium.order_under("master") == ["slide"]
+    assert result["remainingPlacements"] == 1
+    assert "slide" in trilium.notes
+
+
+def test_unlinking_the_last_placement_is_refused(server, trilium):
+    """Trilium deletes a note that has no placement left. Without this guard the
+    same call unfiles sometimes and destroys other times, and nothing at the
+    call site tells the two apart."""
+    trilium.add_children("master", "slide")
+
+    result = server.unlink_branch("master_slide")
+
+    assert "ONLY PLACEMENT" in result
+    assert "delete_note" in result
+    assert trilium.branches_deleted == []
+    assert trilium.order_under("master") == ["slide"]
+
+
+# ── set_labels / remove_label ────────────────────────────────────────────────
+
+def test_set_labels_adds_a_label_to_an_existing_note(server, trilium):
+    trilium.add_note("slide", title="A slide")
+
+    server.set_labels("slide", {"reviewStatus": "outdated"})
+
+    assert trilium.attributes_set[-1]["name"] == "reviewStatus"
+    assert trilium.attributes_set[-1]["value"] == "outdated"
+
+
+def test_setting_a_label_that_exists_updates_it_instead_of_duplicating(server, trilium):
+    trilium.add_note("slide", title="A slide")
+    server.set_labels("slide", {"reviewStatus": "outdated"})
+
+    server.set_labels("slide", {"reviewStatus": "current"})
+
+    labels = [a for a in trilium.notes["slide"]["attributes"] if a["name"] == "reviewStatus"]
+    assert len(labels) == 1
+    assert labels[0]["value"] == "current"
+
+
+def test_reserved_labels_are_refused_here_too(server, trilium):
+    trilium.add_note("slide", title="A slide")
+
+    result = server.set_labels("slide", {"notecastType": "slide"})
+
+    assert "RESERVED" in result
+    assert trilium.attributes_set == []
+
+
+def test_an_inherited_label_is_not_edited_where_it_shows_up(server, trilium):
+    """A note reports what it inherits alongside what it owns. Patching the
+    inherited one would rewrite it on the note it comes from — for every note
+    inheriting it, silently."""
+    trilium.add_note("slide", title="A slide")
+    trilium.notes["slide"]["attributes"].append({
+        "type": "label", "name": "reviewStatus", "value": "current",
+        "noteId": "template", "attributeId": "inherited01",
+    })
+
+    server.set_labels("slide", {"reviewStatus": "outdated"})
+
+    assert trilium.attributes_patched == []
+    assert trilium.attributes_set[-1]["noteId"] == "slide"
+
+
+def test_remove_label_deletes_the_notes_own_label(server, trilium):
+    trilium.add_note("slide", title="A slide")
+    server.set_labels("slide", {"reviewStatus": "outdated"})
+
+    result = json.loads(server.remove_label("slide", "reviewStatus"))
+
+    assert result["removed"] == 1
+    assert trilium.notes["slide"]["attributes"] == []
+
+
+def test_removing_a_label_that_is_not_there_is_not_an_error(server, trilium):
+    trilium.add_note("slide", title="A slide")
+
+    result = json.loads(server.remove_label("slide", "reviewStatus"))
+
+    assert result["removed"] == 0
+    assert trilium.attributes_deleted == []
+
+
+def test_remove_label_leaves_an_inherited_label_alone(server, trilium):
+    """It belongs to the note it comes from; deleting it there strips it from
+    every note that inherits it."""
+    trilium.add_note("slide", title="A slide")
+    trilium.notes["slide"]["attributes"].append({
+        "type": "label", "name": "reviewStatus", "value": "current",
+        "noteId": "template", "attributeId": "inherited01",
+    })
+
+    result = json.loads(server.remove_label("slide", "reviewStatus"))
+
+    assert result["removed"] == 0
+    assert trilium.attributes_deleted == []

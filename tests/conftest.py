@@ -64,6 +64,9 @@ class FakeTrilium:
         # childNoteIds could not tell a correct reordering from a no-op.
         self.branches: dict[str, dict] = {}
         self.branches_patched: list[dict] = []
+        self.branches_created: list[dict] = []
+        self.branches_deleted: list[str] = []
+        self.attributes_deleted: list[str] = []
         # Attachments keyed by attachmentId. `content_writes` records the raw
         # body *and* the Content-Type of every write, because the Content-Type is
         # the part that decides whether Trilium stores the bytes or mangles them.
@@ -75,9 +78,11 @@ class FakeTrilium:
         self.search_returns_attributes = True
 
     def add_type(self, note_id: str, title: str, type_id: str, content: str, **mechanics: str):
-        attributes = [{"type": "label", "name": "notecastType", "value": type_id}]
+        attributes = [{"type": "label", "name": "notecastType", "value": type_id,
+                       "noteId": note_id, "attributeId": f"{note_id}_notecastType"}]
         attributes += [
-            {"type": "label", "name": name, "value": value}
+            {"type": "label", "name": name, "value": value,
+             "noteId": note_id, "attributeId": f"{note_id}_{name}"}
             for name, value in mechanics.items()
         ]
         self.notes[note_id] = {
@@ -124,6 +129,11 @@ class FakeTrilium:
             side_effect=self._branch_route)
         respx_mock.patch(path__regex=r"^/etapi/branches/(?P<bid>[^/]+)$").mock(
             side_effect=self._branch_patch_route)
+        respx_mock.delete(path__regex=r"^/etapi/branches/(?P<bid>[^/]+)$").mock(
+            side_effect=self._branch_delete_route)
+        respx_mock.post(path="/etapi/branches").mock(side_effect=self._branch_create_route)
+        respx_mock.delete(path__regex=r"^/etapi/attributes/(?P<aid>[^/]+)$").mock(
+            side_effect=self._attribute_delete_route)
         respx_mock.post(path="/etapi/attachments").mock(side_effect=self._attachment_create_route)
         respx_mock.put(path__regex=r"^/etapi/attachments/(?P<aid>[^/]+)/content$").mock(
             side_effect=self._attachment_content_route)
@@ -157,6 +167,11 @@ class FakeTrilium:
                 "parentNoteId": parent_id, "notePosition": i * step,
             }
             parent["childNoteIds"].append(note_id)
+            # Real ETAPI reports a note's placements on the note itself. Both
+            # sides are needed: `list_children` names the connecting branch by
+            # intersecting them, which is what keeps two clones of one note apart.
+            self.notes[note_id].setdefault("parentBranchIds", []).append(branch_id)
+            self.notes[note_id].setdefault("parentNoteIds", []).append(parent_id)
         parent["childBranchIds"] = [b["branchId"] for b in self.branches.values()
                                     if b["parentNoteId"] == parent_id]
         return parent_id
@@ -218,6 +233,7 @@ class FakeTrilium:
         self.attributes_set.append(body)
         self.notes[body["noteId"]]["attributes"].append(
             {"type": "label", "name": body["name"], "value": body.get("value", ""),
+             "noteId": body["noteId"],
              "attributeId": f"attr{len(self.attributes_set):02d}"})
         return httpx.Response(201, json={"attributeId": f"attr{len(self.attributes_set):02d}"})
 
@@ -268,6 +284,62 @@ class FakeTrilium:
         if nid not in self.content:
             return httpx.Response(404, text="")
         return httpx.Response(200, text=self.content[nid])
+
+    def _branch_create_route(self, request):
+        """Trilium upserts here: measured on a live instance, a create for a
+        note/parent pair that already has a branch answers with that branch
+        instead of adding a second one. `move_to_parent` refuses same-parent
+        moves precisely because of this, so the double has to reproduce it."""
+        body = json.loads(request.content)
+        note_id, parent_id = body["noteId"], body["parentNoteId"]
+        self.branches_created.append(body)
+        for branch in self.branches.values():
+            if branch["noteId"] == note_id and branch["parentNoteId"] == parent_id:
+                return httpx.Response(200, json={"branchId": branch["branchId"]})
+        branch_id = f"{parent_id}_{note_id}"
+        positions = [b["notePosition"] for b in self.branches.values()
+                     if b["parentNoteId"] == parent_id]
+        self.branches[branch_id] = {
+            "branchId": branch_id, "noteId": note_id, "parentNoteId": parent_id,
+            "notePosition": (max(positions) if positions else 0) + 10,
+        }
+        self._reindex(parent_id)
+        self.notes[note_id].setdefault("parentBranchIds", []).append(branch_id)
+        self.notes[note_id].setdefault("parentNoteIds", []).append(parent_id)
+        return httpx.Response(201, json={"branchId": branch_id})
+
+    def _branch_delete_route(self, request, bid):
+        self.branches_deleted.append(bid)
+        branch = self.branches.pop(bid, None)
+        if branch is not None:
+            note = self.notes.get(branch["noteId"], {})
+            if bid in note.get("parentBranchIds", []):
+                note["parentBranchIds"].remove(bid)
+            if branch["parentNoteId"] in note.get("parentNoteIds", []):
+                note["parentNoteIds"].remove(branch["parentNoteId"])
+            self._reindex(branch["parentNoteId"])
+        return httpx.Response(204)
+
+    def _reindex(self, parent_id: str) -> None:
+        """Keep the parent's two views of its children agreeing after a branch
+        appears or disappears — the real ETAPI reports both."""
+        parent = self.notes.get(parent_id)
+        if parent is None:
+            return
+        kids = sorted(
+            (b for b in self.branches.values() if b["parentNoteId"] == parent_id),
+            key=lambda b: b["notePosition"],
+        )
+        parent["childNoteIds"] = [b["noteId"] for b in kids]
+        parent["childBranchIds"] = [b["branchId"] for b in kids]
+
+    def _attribute_delete_route(self, request, aid):
+        self.attributes_deleted.append(aid)
+        for note in self.notes.values():
+            note["attributes"] = [
+                a for a in note.get("attributes", []) if a.get("attributeId") != aid
+            ]
+        return httpx.Response(204)
 
 
 @pytest.fixture

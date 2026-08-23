@@ -209,12 +209,28 @@ def _search(query: str, limit: int = 20) -> list[dict]:
     return data if isinstance(data, list) else data.get("results", [])
 
 
+def _own_labels(note: dict, name: str | None = None) -> list[dict]:
+    """The note's *own* labels, never the inherited ones.
+
+    A note's `attributes` carry what it inherits as well as what it owns, each
+    tagged with the noteId of whoever owns it. Matching on name alone would
+    reach past the note: patching an inherited label edits the template it comes
+    from, and deleting one removes it from every note that inherits it. Both are
+    silent — the note being worked on looks correct afterwards.
+    """
+    return [
+        a for a in note.get("attributes", [])
+        if a["type"] == "label"
+        and a.get("noteId") == note["noteId"]
+        and (name is None or a["name"] == name)
+    ]
+
+
 def _set_attribute(note_id: str, name: str, value: str) -> dict:
     # Check if attribute exists first
     note = _get(f"notes/{_id(note_id)}")
-    for attr in note.get("attributes", []):
-        if attr["name"] == name and attr["type"] == "label":
-            return _patch(f"attributes/{_id(attr['attributeId'])}", {"value": value})
+    for attr in _own_labels(note, name):
+        return _patch(f"attributes/{_id(attr['attributeId'])}", {"value": value})
     # Create new attribute
     return _post("attributes", {
         "noteId": note_id,
@@ -222,6 +238,47 @@ def _set_attribute(note_id: str, name: str, value: str) -> dict:
         "name": name,
         "value": value,
     })
+
+
+def _branch_between(note_id: str, parent_note_id: str) -> str | None:
+    """The branch placing `note_id` under `parent_note_id`, or None if there is
+    none.
+
+    Both sides report the branches they sit on, so the one id they agree on
+    names the placement — the same intersection `list_children` uses, and for the
+    same reasons: no request per branch, and no assumption about how Trilium
+    composes a branch id.
+    """
+    note = _get(f"notes/{_id(note_id)}")
+    parent = _get(f"notes/{_id(parent_note_id)}")
+    shared = set(note.get("parentBranchIds", [])) & set(parent.get("childBranchIds", []))
+    return next(iter(shared), None)
+
+
+def _is_at_or_above(candidate_id: str, of_note_id: str) -> bool:
+    """True when `candidate_id` is `of_note_id` itself or an ancestor of it.
+
+    Walks *up* from `of_note_id` rather than down from `candidate_id`: a note has
+    a handful of parents and can have any number of descendants, so ascending
+    touches far less of the tree.
+
+    The argument order is the easy thing to get backwards, and getting it
+    backwards passes every happy-path test — so read it as the question it
+    answers: "does `candidate_id` sit at or above `of_note_id`?" For the move
+    guard the note being moved is the candidate, and the target is what must not
+    be below it.
+    """
+    seen: set[str] = set()
+    frontier = [of_note_id]
+    while frontier:
+        current = frontier.pop()
+        if current == candidate_id:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        frontier.extend(_get(f"notes/{_id(current)}").get("parentNoteIds", []))
+    return False
 
 
 # ── Note-type definitions (Notecast) ─────────────────────────────────────────
@@ -310,6 +367,51 @@ def _type_ambiguous_notice(type_id: str) -> str:
         "silently become the instructions for every note of this type. Do NOT invent\n"
         "or pick one. Stop, tell the author to remove the duplicate label, and let\n"
         "them fix it before any note of this type is written."
+    )
+
+
+def _not_placed_notice(note_id: str, parent_id: str) -> str:
+    return (
+        f"⚠️ NOT PLACED THERE — NOTHING MOVED\n"
+        f"Note {note_id} has no placement under parent {parent_id}, so there is no\n"
+        "move to make. A note can sit under several parents at once; name the one it\n"
+        "is actually under. list_children(parent) reports the branch of every child\n"
+        "it holds — check there rather than guessing which parent was meant."
+    )
+
+
+def _same_parent_notice(note_id: str, parent_id: str) -> str:
+    return (
+        f"⚠️ SOURCE AND TARGET ARE THE SAME PARENT — NOTHING MOVED\n"
+        f"Note {note_id} is already under {parent_id}. Moving it there would mean\n"
+        "removing the very placement just written — measured on a live instance,\n"
+        "Trilium answers a create for an existing note/parent pair with the branch\n"
+        "that already exists rather than a second one, so the delete that follows\n"
+        "would take away the note's only placement. To change its position among\n"
+        "its siblings, use move_node(branch_id, index) instead."
+    )
+
+
+def _cycle_notice(note_id: str, parent_id: str) -> str:
+    return (
+        f"⚠️ TARGET IS INSIDE THE NOTE'S OWN SUBTREE — NOTHING MOVED\n"
+        f"Parent {parent_id} is {note_id} itself, or sits below it. Moving a note\n"
+        "into its own subtree detaches that whole subtree from the root: it stops\n"
+        "being reachable from the tree while still existing. Pick a target outside\n"
+        f"the subtree of {note_id}."
+    )
+
+
+def _last_branch_notice(note_id: str, branch_id: str) -> str:
+    return (
+        f"⚠️ THAT IS THE NOTE'S ONLY PLACEMENT — NOTHING UNLINKED\n"
+        f"Branch {branch_id} is the last one holding note {note_id} in the tree, and\n"
+        "removing it would not merely unfile the note — it would delete it.\n"
+        "unlink_branch exists to take a note out of ONE place while it stays in the\n"
+        "others; it deliberately refuses to become a delete. If the note really is\n"
+        "meant to be gone everywhere, that is delete_note(note_id) — a different\n"
+        "decision, so make it explicitly. To keep the note but file it elsewhere,\n"
+        "use move_to_parent."
     )
 
 
@@ -686,18 +788,34 @@ def list_children(parent_note_id: str = DEFAULT_PARENT) -> str:
     This is plain tree navigation — it does not resolve a presentation the way
     the presenter does. Use it to drill down and find where to create notes.
 
+    `branchId` is the placement of that child *under this parent* — what
+    `move_node` takes, and what tells two clones of the same note apart. It is
+    derived, not fetched: the branch joining parent and child is the one id that
+    appears both in the parent's `childBranchIds` and in the child's
+    `parentBranchIds`, so the set intersection names it without a request per
+    child and without assuming how Trilium composes a branch id. It is null on
+    an instance whose ETAPI omits either field.
+
+    Sibling order is the order of this array; `notePosition` is deliberately not
+    reported, because reading it means fetching every branch — doubling the
+    requests to restate what the array already says. `move_node` takes an index,
+    not a position.
+
     Args:
         parent_note_id: Parent note ID to list children from.
     Returns:
-        JSON array of {noteId, title, type, childCount, hasChildren}.
+        JSON array of {noteId, branchId, title, type, childCount, hasChildren}.
     """
     note = _get(f"notes/{_id(parent_note_id)}")
+    child_branches = set(note.get("childBranchIds", []))
     results = []
     for child_id in note.get("childNoteIds", []):
         child = _get(f"notes/{_id(child_id)}")
         child_ids = child.get("childNoteIds", [])
+        shared = child_branches.intersection(child.get("parentBranchIds", []))
         results.append({
             "noteId": child_id,
+            "branchId": next(iter(shared), None),
             "title": child["title"],
             "type": child["type"],
             "childCount": len(child_ids),
@@ -724,6 +842,146 @@ def clone_node(note_id: str, target_parent_id: str, prefix: str | None = None) -
         body["prefix"] = prefix
     result = _post("branches", body)
     return json.dumps({"branchId": result["branchId"], "noteId": note_id})
+
+
+@mcp.tool()
+def move_to_parent(
+    note_id: str,
+    source_parent_id: str,
+    target_parent_id: str,
+    position: int | None = None,
+) -> str:
+    """Move a note from one parent to another. The note keeps its identity,
+    content and every other placement it has.
+
+    `source_parent_id` is required rather than inferred, because a cloned note
+    sits under several parents and there is no way to tell from the note alone
+    which of those placements was meant. Naming the wrong one would silently
+    reshape a different part of the tree.
+
+    Trilium has no "change the parent" operation — placement lives on a branch,
+    and `PATCH /branches` cannot rewrite `parentNoteId`. So this writes the new
+    placement first and removes the old one second. That order matters: the
+    reverse can leave the note with no placement at all, which is how Trilium
+    spells "deleted". If the delete fails, the note is briefly in both places —
+    visible, and repairable with unlink_branch.
+
+    Args:
+        note_id: The note to move.
+        source_parent_id: The parent it is currently under (the placement to move).
+        target_parent_id: The parent to move it to.
+        position: Optional 0-based index among its new siblings; appended if omitted.
+    Returns:
+        JSON with the new branchId and the removed one, or a refusal notice.
+    """
+    source_branch = _branch_between(note_id, source_parent_id)
+    if source_branch is None:
+        return _not_placed_notice(note_id, source_parent_id)
+    if source_parent_id == target_parent_id:
+        return _same_parent_notice(note_id, target_parent_id)
+    if _is_at_or_above(note_id, target_parent_id):
+        return _cycle_notice(note_id, target_parent_id)
+
+    created = _post("branches", {"noteId": note_id, "parentNoteId": target_parent_id})
+    new_branch = created["branchId"]
+    _delete(f"branches/{_id(source_branch)}")
+    if position is not None:
+        move_node(new_branch, position)
+    return json.dumps({
+        "noteId": note_id,
+        "branchId": new_branch,
+        "removedBranchId": source_branch,
+        "from": source_parent_id,
+        "to": target_parent_id,
+    })
+
+
+@mcp.tool()
+def unlink_branch(branch_id: str) -> str:
+    """Remove ONE placement of a note, leaving the note and its other placements
+    alone — "take this out of here", not "delete this".
+
+    The counterpart to clone_node: a cloned note is one note in several places,
+    and this removes one of those places. It refuses when the branch is the
+    note's last one, because Trilium deletes a note that has no placement left —
+    so without that guard the same call would sometimes unfile and sometimes
+    destroy, with nothing at the call site to tell the two apart.
+
+    Use list_children(parent) to find the branch belonging to a given parent.
+
+    Args:
+        branch_id: The branch (placement) to remove.
+    Returns:
+        JSON confirming what was unlinked, or a refusal notice.
+    """
+    branch = _get(f"branches/{_id(branch_id)}")
+    note_id = branch["noteId"]
+    note = _get(f"notes/{_id(note_id)}")
+    if len(note.get("parentBranchIds", [])) <= 1:
+        return _last_branch_notice(note_id, branch_id)
+
+    _delete(f"branches/{_id(branch_id)}")
+    return json.dumps({
+        "branchId": branch_id,
+        "noteId": note_id,
+        "unlinkedFrom": branch["parentNoteId"],
+        "remainingPlacements": len(note["parentBranchIds"]) - 1,
+    })
+
+
+@mcp.tool()
+def set_labels(note_id: str, labels: dict[str, str]) -> str:
+    """Add or update labels on an existing note.
+
+    Labels are how a library stays queryable: `#material=handout`,
+    `#reviewStatus=outdated` and the like are findable through search_notes,
+    which a title convention is not. Pass "" for a bare label with no value.
+
+    Existing labels of the same name are updated, not duplicated. Only the
+    note's own labels are touched — an inherited one is left with its owner
+    rather than being edited where it happens to show up.
+
+    The same names are reserved as at creation: they are the MCP's own
+    bookkeeping and overwriting either one breaks silently.
+
+    Args:
+        note_id: The note to label.
+        labels: {name: value}; "" for a bare label.
+    Returns:
+        JSON with the labels applied, or a refusal notice.
+    """
+    refusal = _validate_labels(labels)
+    if refusal:
+        return refusal
+    for name, value in (labels or {}).items():
+        _set_attribute(_id(note_id), name, value)
+    return json.dumps({"noteId": note_id, "labels": labels})
+
+
+@mcp.tool()
+def remove_label(note_id: str, name: str) -> str:
+    """Remove a label from a note.
+
+    The counterpart to set_labels — without it a mis-set mark is permanent,
+    which is enough to stop anyone marking anything. Removing a label that is
+    not there is not an error; it reports zero removals.
+
+    Only the note's own labels are removed. An inherited label is not this
+    note's to delete: it belongs to the note it comes from, and removing it
+    there would strip it from every note inheriting it.
+
+    Args:
+        note_id: The note to remove the label from.
+        name: The label name, without the leading '#'.
+    Returns:
+        JSON with how many labels were removed.
+    """
+    note = _get(f"notes/{_id(note_id)}")
+    removed = []
+    for attr in _own_labels(note, name):
+        _delete(f"attributes/{_id(attr['attributeId'])}")
+        removed.append(attr["attributeId"])
+    return json.dumps({"noteId": note_id, "label": name, "removed": len(removed)})
 
 
 @mcp.tool()
@@ -803,14 +1061,24 @@ def search_notes(query: str, limit: int = 20) -> str:
     - By label: "#notecastType"
     - By label value: "#notecastType=slide"
 
+    `type` and `dateModified` ride along because reviewing a library asks "what
+    is stale here" — without them that is one search plus a `get_note_info` per
+    hit. Both are null when the instance answers a search with bare note stubs
+    rather than full notes.
+
     Args:
         query: Search query string.
         limit: Maximum number of results (default 20).
     Returns:
-        JSON array of matching notes with noteId and title.
+        JSON array of matching notes with noteId, title, type and dateModified.
     """
     notes = _search(query, limit)
-    return json.dumps([{"noteId": n["noteId"], "title": n["title"]} for n in notes])
+    return json.dumps([{
+        "noteId": n["noteId"],
+        "title": n["title"],
+        "type": n.get("type"),
+        "dateModified": n.get("dateModified"),
+    } for n in notes])
 
 
 # ── Live note formats in prompt + tool descriptions ──────────────────────────

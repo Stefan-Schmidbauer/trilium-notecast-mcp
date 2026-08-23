@@ -52,11 +52,15 @@ first, `tools/seed-demo-type.py` tags one throwaway type and removes it again.
 | `update_note` | Update a note's content and/or title |
 | `attach_image` | Attach an image to a note and get back the reference to embed |
 | `get_note_info` | Get note metadata (title, type, children, attributes) |
-| `list_children` | List a note's direct children (tree navigation) |
+| `list_children` | List a note's direct children with the branch each sits on (tree navigation) |
 | `clone_node` | Clone a note into another parent (a branch, not a copy) |
 | `move_node` | Move a note to the n-th place among its siblings (0-based index) |
-| `delete_note` | Delete a note |
-| `search_notes` | Search notes (supports `#label` syntax) |
+| `move_to_parent` | Move one placement of a note to a different parent |
+| `unlink_branch` | Remove ONE placement of a note, keeping the note and its others |
+| `set_labels` | Add or update labels on an existing note |
+| `remove_label` | Remove a label from a note |
+| `delete_note` | Delete a note everywhere |
+| `search_notes` | Search notes (supports `#label` syntax); reports type and `dateModified` |
 
 `create_note` reads the type definition for `note_type`, then creates the note
 with the target type / mime / branch prefix it specifies and stamps its
@@ -72,7 +76,57 @@ have a title slide. `#notecastInstance` and `#notecastType` are refused — the
 first is how the renderer resolves a note's type, the second would turn the note
 into a duplicate type definition and take that type offline.
 `list_children` is plain navigation — the MCP authors notes; **presenting** a
-subtree is the presenter plugin's job, not this server's.
+subtree is the presenter plugin's job, not this server's. It reports a `branchId`
+per child: the placement of that child *under this parent*, which is what
+`move_node` and `unlink_branch` address and what tells two clones of one note
+apart. The id is derived from data the listing already fetched (the one branch id
+parent and child agree on), so it costs no extra request. `notePosition` is
+deliberately not reported — reading it means a request per child to restate what
+the array order already says.
+
+### Editing the tree
+
+Placement in Trilium lives on a *branch*, not on the note, and three of these
+tools are about branches rather than notes. The distinction is worth stating
+plainly, because one of them is destructive and two are not:
+
+| I want to… | Tool |
+|---|---|
+| put a note in a second place | `clone_node` |
+| change where a note sits | `move_to_parent` |
+| take a note out of one place, keep it elsewhere | `unlink_branch` |
+| reorder a note among its siblings | `move_node` |
+| remove a note from everywhere, for good | `delete_note` |
+
+`move_to_parent` needs `source_parent_id` as well as the target: a cloned note
+sits under several parents, and nothing on the note itself says which of those
+placements was meant. It writes the new placement before removing the old one,
+so a failure in between leaves the note in two places rather than in none. It
+refuses three cases outright — a source parent the note is not under, a source
+and target that are the same, and a target inside the note's own subtree.
+
+`unlink_branch` refuses to remove a note's **last** placement, because Trilium
+deletes a note that has none left. That refusal is the whole reason the tool
+exists separately from `delete_note`: without it, the same call would unfile a
+clone in one situation and destroy the original in another, with nothing at the
+call site to distinguish them. Deleting a note everywhere stays an explicit,
+separate decision.
+
+Both behaviours are measured rather than read out of the ETAPI spec — see
+`tools/probe-branch-deletion.py`, which re-measures them after a Trilium upgrade.
+
+### Labels on existing notes
+
+`set_labels` and `remove_label` are what keep a growing library queryable:
+`#material=handout` or `#reviewStatus=outdated` can be searched for, a title
+convention cannot. `set_labels` updates a label of the same name rather than
+adding a second one, and refuses the same reserved names as `create_note`.
+
+Both touch only a note's **own** labels. A note reports what it inherits
+alongside what it owns, so matching on name alone would reach past the note:
+patching an inherited label rewrites it on the note it comes from, and deleting
+one strips it from every note inheriting it — both silently, with the note in
+front of you looking correct afterwards.
 
 ### Images
 
@@ -556,6 +610,12 @@ this README makes:
 | `test_tools.py` | the live format reaches `create_note` / `update_note`, and the middleware really is in the request chain — verified end to end through a client session |
 | `test_attachments.py` | an image survives the roundtrip byte for byte, goes out as `application/octet-stream`, and gets the reference form its note's target type needs |
 
+`test_type_resolution.py` also covers the tree edits: that a move writes the new
+placement before deleting the old one, that the other placements of a clone are
+untouched, that each of the three refusals holds without deleting anything, that
+`unlink_branch` will not take a note's last placement, and that neither label
+tool reaches an inherited attribute.
+
 One thing the mocks cannot pin is whether *Trilium* still accepts that binary
 path — the ETAPI spec does not describe it, so it was measured rather than read.
 `tools/probe-attachment-binary.py` re-measures it against a live instance and is
@@ -763,7 +823,10 @@ The reverse proxy is set up the same way as for any other variant — see
 ## Content Organization
 
 `clone_node` creates a Trilium *branch*, so one note can appear under several
-parents at once — edit it in one place, and every appearance updates. This
+parents at once — edit it in one place, and every appearance updates.
+`unlink_branch` is its counterpart: it removes one of those appearances and
+leaves the rest, which is how a library entry leaves one collection without
+leaving the library. This
 supports reuse patterns like Trilium Presenter's **Master / Sets** (a central
 library of source notes, and finished decks assembled from clones of them), but
 nothing here is presentation-specific: the same mechanism works for any type of
