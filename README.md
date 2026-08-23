@@ -1,7 +1,6 @@
 # trilium-notecast-mcp
 
-[![Release](https://img.shields.io/github/v/release/Stefan-Schmidbauer/trilium-notecast-mcp?sort=semver)](https://github.com/Stefan-Schmidbauer/trilium-notecast-mcp/releases/latest)
-[![License: MIT](https://img.shields.io/github/license/Stefan-Schmidbauer/trilium-notecast-mcp)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![TriliumNext](https://img.shields.io/badge/TriliumNext-compatible-000000?logo=trilium&logoColor=white)](https://triliumnotes.org)
 [![MCP](https://img.shields.io/badge/MCP-server-7c3aed)](https://modelcontextprotocol.io)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org)
