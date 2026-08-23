@@ -38,11 +38,11 @@ prefix). The relevant endpoints:
 Three measurements drive the design:
 
 1. A move is **create new branch + delete old branch**, not a patch.
-2. Deleting a note's *last* branch deletes the note. That is the single most
-   important thing for the guards below to get right, and it must be measured
-   against a live instance — the same way the attachment content-type behaviour
-   was measured rather than read out of the spec. **Still unmeasured**; the
-   guards assume it, and `tools/probe-branch-deletion.py` exists to confirm it.
+2. Deleting a note's *last* branch deletes the note; deleting any other branch
+   leaves the note alone. That is the single most important thing for the guards
+   below to get right. **Measured on a live instance** — the same way the
+   attachment content-type behaviour was measured rather than read out of the
+   spec, which declares none of this.
 
 3. `POST /branches` for a note/parent pair that already has a branch answers
    with the *existing* branchId rather than creating a second placement.
@@ -114,7 +114,7 @@ Reviewing a library means asking "what is old here". That is one search plus one
 `get_note_info` per hit today. Two extra fields per result make it one call.
 Both are null when the instance answers with bare note stubs.
 
-## What shipped, and what is still assumed
+## What shipped
 
 All six are implemented, with tests in `test_type_resolution.py`.
 
@@ -124,11 +124,18 @@ noteId. `_own_labels()` filters on that, and `_set_attribute()` was changed to
 use it — before, a label matched by name alone could be patched on the template
 it came from rather than on the note being edited.
 
-The open item is measurement 2. `unlink_branch`'s refusal and the write-then-
-delete order in `move_to_parent` both assume that a branchless note is a deleted
-note. If the probe ever shows otherwise, the guard becomes tidiness rather than
-a safety property — worth keeping either way, but the reasoning in the code
-comments would need correcting.
+Nothing is left assumed. `tools/probe-branch-deletion.py` ran against a live
+instance on 2026-08-23 and confirmed all three measurements:
+
+    (3) create for an existing note/parent pair → the existing branch id (upsert)
+    (1) deleting one of two placements         → note survives
+    (2) deleting the last placement            → note is deleted, as assumed
+
+So `unlink_branch`'s refusal is a safety property rather than tidiness, and the
+write-then-delete order in `move_to_parent` is load-bearing rather than
+defensive. Re-run the probe after a Trilium upgrade; if (2) ever reports that
+the note survives, both pieces of reasoning need correcting in the code
+comments, not just relaxing.
 
 ## Non-goals
 
