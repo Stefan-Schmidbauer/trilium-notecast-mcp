@@ -1,20 +1,18 @@
-# Service definition for the Trilium MCP server.
+# Service definition for the Trilium Notecast MCP server.
 #
-# This is a *snippet*, not a standalone stack: it is meant to be pasted into the
-# compose file that already runs Trilium, so both containers share a network and
-# the MCP server can reach Trilium under its service name.
+# This is a *snippet*, not a standalone stack: it is meant to be pasted, under
+# `services:`, into the compose file the server already runs.
+# Paste it into the stack that runs Trilium: on a shared network the server
+# reaches Trilium under its service name.
 #
 # The image is built by `deploy.sh` through a remote Docker context — there is
 # deliberately no `build:` key, so the server needs no source checkout. It is
 # therefore local-only, which is what `pull_policy: never` below is for.
 #
-# Adjust: the Trilium service name in `TRILIUM_URL`, the published port, the
-# hostnames in MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS, and the network name at
-# the bottom — `web` has to be one the target compose file
-# already declares, and it must be the same one Trilium is on, or the service
-# name in TRILIUM_URL will not resolve. Compose fails with "network web not
-# found" if it is absent; drop the `networks:` key entirely if the stack uses
-# only its implicit default network.
+# Adjust: the published port, the hostnames in MCP_ALLOWED_HOSTS /
+# MCP_ALLOWED_ORIGINS, the Trilium service name in TRILIUM_URL, and the network name at the bottom — `web` has to
+# be one the target compose file already declares. Drop the `networks:` key
+# entirely if the stack uses only its implicit default network.
 
   trilium-notecast-mcp:
     image: trilium-notecast-mcp:local
@@ -27,15 +25,12 @@
     # inherits — so `restart: always` also recovers a server that is up but no
     # longer answering. Nothing to declare here.
     restart: always
-    # No `depends_on:` on purpose. It would buy nothing — without
-    # `condition: service_healthy` it only orders the *start*, and this server
-    # touches Trilium on the first tool call, not at startup, so a Trilium that
-    # arrives later is never noticed. What it does buy is a hazard: `docker
-    # compose up -d trilium-notecast-mcp` pulls declared dependencies up with
-    # it and recreates them if their configuration has drifted from what is
-    # running — so a deploy of *this* service silently restarted Trilium and,
-    # because a newer image happened to be on the host, upgraded it across a
-    # database migration. deploy.sh passes --no-deps for the same reason.
+    # No `depends_on:` on purpose. This server touches Trilium on the first tool
+    # call, not at startup, so ordering the start buys nothing — and `docker
+    # compose up -d trilium-notecast-mcp` would pull Trilium up with it and
+    # recreate it if its configuration drifted, which once carried Trilium across
+    # an unrequested database migration. deploy.sh passes --no-deps for the same
+    # reason.
     deploy:
       resources:
         limits:
@@ -52,12 +47,14 @@
     tmpfs:
       - /tmp:noexec,nosuid,nodev
     ports:
-      # Localhost only — exposed to the outside by a reverse proxy.
+      # Localhost only — exposed to the outside by a TLS reverse proxy.
       - "127.0.0.1:9151:8000"
     env_file:
       - ./.env.trilium-notecast-mcp
     environment:
-      # Trilium reached over the shared compose network, not via the host.
+      # Trilium reached over the shared compose network, not via the host. The
+      # network at the bottom must be the one Trilium is on, or the name does
+      # not resolve.
       - TRILIUM_URL=http://triliumnext:8080
       - MCP_TRANSPORT=streamable-http
       - MCP_HOST=0.0.0.0
@@ -65,6 +62,7 @@
       # Path the reverse proxy mounts the server under. Named after the service
       # so a generic /mcp stays free for other MCP servers on the same host.
       - MCP_PATH=/trilium-notecast-mcp
+      - TZ=Europe/Berlin
       # The SDK's DNS-rebinding protection checks the Host header, so the
       # hostname the reverse proxy serves under must be listed here.
       - MCP_ALLOWED_HOSTS=your-host.example.net,127.0.0.1:9151,localhost:9151

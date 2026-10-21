@@ -21,11 +21,21 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Per-machine settings; environment wins over the file.
-[ -f deploy.env ] && { set -a; . ./deploy.env; set +a; }
+# Per-machine settings; environment wins over the file. Sourcing the file would
+# overwrite what is already exported, so those values are set aside first and
+# put back afterwards. (The ${a[@]+…} form keeps bash 3.2 on macOS quiet about
+# an empty array under `set -u`.)
+if [ -f deploy.env ]; then
+    _from_env=()
+    for _v in DEPLOY_HOST DOCKER_CTX REMOTE_COMPOSE HEALTH_URL; do
+        [ -n "${!_v+set}" ] && _from_env+=("${_v}=${!_v}")
+    done
+    set -a; . ./deploy.env; set +a
+    for _kv in ${_from_env[@]+"${_from_env[@]}"}; do export "$_kv"; done
+fi
 
 DEPLOY_HOST=${DEPLOY_HOST:-}
-DOCKER_CTX=${DOCKER_CTX:-trilium-notecast-mcp}
+DOCKER_CTX=${DOCKER_CTX:-}
 REMOTE_COMPOSE=${REMOTE_COMPOSE:-/opt/docker/docker-compose.yml}
 SERVICE=trilium-notecast-mcp
 IMAGE=trilium-notecast-mcp
@@ -37,8 +47,17 @@ die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 [ -n "$DEPLOY_HOST" ] \
     || die "DEPLOY_HOST is not set. Copy deploy/deploy.env.example to deploy.env and fill it in, or export DEPLOY_HOST=user@host."
 
+# One context per host, shared by every service deployed there: a context is a
+# connection to a Docker daemon, not to a service. Named after the host by
+# default, without user and port — admin@s01.example.net:2222 becomes
+# s01.example.net. Set DOCKER_CTX for something shorter.
+if [ -z "$DOCKER_CTX" ]; then
+    DOCKER_CTX=${DEPLOY_HOST#*@}
+    DOCKER_CTX=${DOCKER_CTX%%:*}
+fi
+
 # --- version tag -------------------------------------------------------------
-if git rev-parse --git-dir >/dev/null 2>&1; then
+if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
     # Named after the last release tag: v1.2.0 on the tag itself, and
     # v1.2.0-3-gafe0bf9 three commits past it. That makes the rollback command
     # in the README refer to a version someone can place, rather than to a bare
@@ -59,6 +78,13 @@ if ! docker context inspect "$DOCKER_CTX" >/dev/null 2>&1; then
     info "Creating docker context '${DOCKER_CTX}' -> ssh://${DEPLOY_HOST}"
     docker context create "$DOCKER_CTX" --docker "host=ssh://${DEPLOY_HOST}"
 fi
+
+# The context is shared and may have been created by another repository — so
+# make sure it leads where this deploy is meant to go, rather than building and
+# restarting on whatever host the name happens to point at.
+CTX_HOST=$(docker context inspect "$DOCKER_CTX" -f '{{.Endpoints.docker.Host}}')
+[ "$CTX_HOST" = "ssh://${DEPLOY_HOST}" ] \
+    || die "Docker context '${DOCKER_CTX}' points to ${CTX_HOST}, not ssh://${DEPLOY_HOST}. Set DOCKER_CTX to another name, or fix DEPLOY_HOST."
 
 docker --context "$DOCKER_CTX" version >/dev/null 2>&1 \
     || die "Cannot reach the Docker daemon via context '${DOCKER_CTX}'. Check SSH access to ${DEPLOY_HOST}."
