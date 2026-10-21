@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 import httpx
 from mcp.server.mcpserver import MCPServer
-from mcp.types import TextContent
+from mcp.types import TextContent, ToolAnnotations
 
 
 def _env_flag(name: str) -> bool:
@@ -58,7 +58,7 @@ if not TRILIUM_API_KEY:
 
 logger = logging.getLogger("trilium-notecast-mcp")
 
-mcp = MCPServer("trilium-notecast")
+mcp = MCPServer("trilium-notecast", version=os.environ.get("MCP_SERVER_VERSION", ""))
 
 
 # Trilium IDs are random alphanumerics; branch IDs join two of them with "_",
@@ -553,7 +553,15 @@ def _group_types_by_id(notes: list[dict]) -> dict[str, list[dict]]:
 
 # ── Generic note tools ───────────────────────────────────────────────────────
 
-@mcp.tool()
+# Every tool declares one of these, so a client never falls back on the spec's
+# default, which treats an unannotated tool as destructive. Destructive means
+# something is overwritten or removed; adding and rearranging are not.
+_READ_ONLY = ToolAnnotations(read_only_hint=True)
+_NON_DESTRUCTIVE = ToolAnnotations(destructive_hint=False)
+_DESTRUCTIVE = ToolAnnotations(destructive_hint=True)
+
+
+@mcp.tool(annotations=_READ_ONLY)
 def list_note_types() -> str:
     """List the note types available to create_note.
 
@@ -570,7 +578,7 @@ def list_note_types() -> str:
     ])
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE)
 def create_note(
     note_type: str,
     title: str,
@@ -640,7 +648,7 @@ def create_note(
     return json.dumps({"noteId": note_id, "title": title, "noteType": note_type})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_note(note_id: str) -> str:
     """Get the raw content of a note.
 
@@ -652,7 +660,7 @@ def get_note(note_id: str) -> str:
     return _get_content(note_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE)
 def update_note(
     note_id: str,
     content: str | None = None,
@@ -693,7 +701,7 @@ def _image_reference(note_type: str, attachment_id: str, filename: str, alt: str
             f' alt="{alt}">')
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE)
 def attach_image(
     note_id: str,
     filename: str,
@@ -769,7 +777,7 @@ def attach_image(
     })
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_note_info(note_id: str) -> str:
     """Get metadata for a note (title, type, children, attributes).
 
@@ -781,7 +789,7 @@ def get_note_info(note_id: str) -> str:
     return json.dumps(_get(f"notes/{_id(note_id)}"))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def list_children(parent_note_id: str = DEFAULT_PARENT) -> str:
     """List the direct children of a note, for navigation while authoring.
 
@@ -824,7 +832,7 @@ def list_children(parent_note_id: str = DEFAULT_PARENT) -> str:
     return json.dumps(results)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE)
 def clone_node(note_id: str, target_parent_id: str, prefix: str | None = None) -> str:
     """Clone a note into another parent (a Trilium branch, not a copy).
 
@@ -844,7 +852,7 @@ def clone_node(note_id: str, target_parent_id: str, prefix: str | None = None) -
     return json.dumps({"branchId": result["branchId"], "noteId": note_id})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE)
 def move_to_parent(
     note_id: str,
     source_parent_id: str,
@@ -896,7 +904,7 @@ def move_to_parent(
     })
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE)
 def unlink_branch(branch_id: str) -> str:
     """Remove ONE placement of a note, leaving the note and its other placements
     alone — "take this out of here", not "delete this".
@@ -929,7 +937,7 @@ def unlink_branch(branch_id: str) -> str:
     })
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE)
 def set_labels(note_id: str, labels: dict[str, str]) -> str:
     """Add or update labels on an existing note.
 
@@ -958,7 +966,7 @@ def set_labels(note_id: str, labels: dict[str, str]) -> str:
     return json.dumps({"noteId": note_id, "labels": labels})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE)
 def remove_label(note_id: str, name: str) -> str:
     """Remove a label from a note.
 
@@ -984,7 +992,7 @@ def remove_label(note_id: str, name: str) -> str:
     return json.dumps({"noteId": note_id, "label": name, "removed": len(removed)})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE)
 def move_node(branch_id: str, new_position: int) -> str:
     """Move a note to the n-th place among its siblings.
 
@@ -1039,7 +1047,7 @@ def move_node(branch_id: str, new_position: int) -> str:
                        "renumbered": renumbered})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE)
 def delete_note(note_id: str) -> str:
     """Delete a note.
 
@@ -1052,7 +1060,7 @@ def delete_note(note_id: str) -> str:
     return json.dumps({"noteId": note_id, "deleted": True})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def search_notes(query: str, limit: int = 20) -> str:
     """Search Trilium notes by title or content.
 

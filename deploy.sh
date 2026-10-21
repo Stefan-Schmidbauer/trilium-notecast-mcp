@@ -72,7 +72,11 @@ if [ "${1:-}" != "--no-build" ]; then
     docker --context "$DOCKER_CTX" build \
         -t "${IMAGE}:${TAG}" \
         -t "${IMAGE}:local" \
+        --build-arg "VERSION=${TAG}" \
         .
+else
+    # Nothing was built, so there is no ${IMAGE}:${TAG} — name what really runs.
+    TAG=local
 fi
 
 # --- recreate ----------------------------------------------------------------

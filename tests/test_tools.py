@@ -87,6 +87,24 @@ def test_all_tools_are_still_listed(server, trilium):
     }
 
 
+def test_every_tool_says_whether_it_reads_or_destroys(server, trilium):
+    """Clients use these to decide what may run without asking — and the hints
+    have to survive the middleware, which rewrites the serialised payload. A
+    tool without them counts as destructive by the spec's default, so a new one
+    that forgets its annotation fails here rather than prompting needlessly."""
+    tools = {t["name"]: t.get("annotations") or {} for t in list_tools(server)}
+    read_only = {name for name, a in tools.items() if a.get("readOnlyHint")}
+    assert read_only == {
+        "list_note_types", "get_note", "get_note_info", "list_children", "search_notes",
+    }
+    destructive = {name for name, a in tools.items() if a.get("destructiveHint") is True}
+    assert destructive == {
+        "update_note", "unlink_branch", "set_labels", "remove_label", "delete_note",
+    }
+    writing = tools.keys() - read_only - destructive
+    assert all(tools[name].get("destructiveHint") is False for name in writing)
+
+
 def test_every_tool_has_a_description_and_a_schema(server, trilium):
     """A tool with no description is invisible to the model in practice."""
     for tool in list_tools(server):

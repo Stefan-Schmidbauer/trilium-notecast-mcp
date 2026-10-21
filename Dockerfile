@@ -15,6 +15,12 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 COPY --chmod=644 server.py .
 
+# Set by deploy.sh to its image tag and reported to clients as the server's
+# version — the one place that says which build runs behind `:local`. Late in
+# the file so that a new value does not invalidate the pip layer above.
+ARG VERSION=""
+ENV MCP_SERVER_VERSION=$VERSION
+
 RUN useradd --system --uid 10001 --no-create-home mcp
 USER 10001
 
