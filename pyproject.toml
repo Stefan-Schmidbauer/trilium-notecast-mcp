@@ -21,13 +21,12 @@ select = [
     "I",    # import sorting
     "B",    # bugbear — mutable defaults, silent except, loop-variable capture
     "UP",   # pyupgrade
-    "S",    # bandit — the reason ruff is here rather than plain flake8
+    "S",    # bandit
 ]
 ignore = [
     "S101",  # assert: the test suite is built on it
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Fixtures are imported for their side effect of being collected, and conftest
-# deliberately imports after mutating os.environ.
+# conftest deliberately imports after mutating os.environ.
 "tests/*" = ["E402"]
