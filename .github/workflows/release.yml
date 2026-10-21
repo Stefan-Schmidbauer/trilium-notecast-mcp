@@ -16,8 +16,7 @@ jobs:
       # the repository, and this job holds contents: write.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Deliberately no `files:` — unlike the two plugin repos, this one ships
-      # no artefact. The plugins publish a Trilium import zip; this server is
+      # Deliberately no `files:` — this repo ships no artefact. The server is
       # deployed as an image built by deploy.sh on the target's own Docker
       # daemon, so there is nothing to attach that anyone would install.
       #

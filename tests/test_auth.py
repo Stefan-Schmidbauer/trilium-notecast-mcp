@@ -109,9 +109,8 @@ def test_healthz_needs_no_token(guarded):
 
 
 def test_healthz_exists_without_a_configured_token(unguarded):
-    """It used to live inside the bearer middleware, so an unauthenticated
-    instance had no /healthz at all — and deploy.sh, which polls it, reported a
-    working deployment as a failure."""
+    """An unauthenticated instance needs the probe too — deploy.sh polls it and
+    would otherwise report a working deployment as a failure."""
     assert call(unguarded, path="/healthz") == (200, b"ok")
 
 

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "trilium-notecast": {
+      "type": "http",
+      "url": "https://mcp.example.net/trilium-notecast-mcp",
+      "headers": { "Authorization": "Bearer your-bearer-token" }
+    }
+  }
+}

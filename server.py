@@ -32,13 +32,12 @@ TRILIUM_URL = os.getenv("TRILIUM_URL", "http://localhost:8080").rstrip("/")
 TRILIUM_API_KEY = os.getenv("TRILIUM_API_KEY", "")
 DEFAULT_PARENT = os.getenv("TRILIUM_DEFAULT_PARENT", "root")
 
-# Transport: "stdio" (default, for Claude Desktop) or "streamable-http" (for the
-# containerised server reached over the tailnet).
+# Transport: "stdio" (default, the client spawns the server) or
+# "streamable-http" (one shared instance, which is how the container runs it).
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio")
 MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 MCP_PATH = os.getenv("MCP_PATH", "/mcp")
-# Optional second layer on top of "only reachable inside the tailnet".
 MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN", "")
 # Serving HTTP without MCP_AUTH_TOKEN is refused rather than warned about, because
 # reaching the endpoint means reaching the whole Trilium instance. This is the
@@ -53,7 +52,8 @@ if not TRILIUM_API_KEY:
     raise OSError(
         "TRILIUM_API_KEY is not set.\n"
         "Generate a token in Trilium: Options → ETAPI → Create new token.\n"
-        "Then set it in the MCP server env block in claude_desktop_config.json."
+        "Then put it in the env file next to the compose file (deploy/env.example\n"
+        "is the template) — see the Configuration section of the README."
     )
 
 logger = logging.getLogger("trilium-notecast-mcp")
@@ -1225,11 +1225,8 @@ mcp.middleware.append(_live_format_middleware)
 class HealthzMiddleware:
     """Answer /healthz, always and without authentication.
 
-    Deliberately its own layer *outside* the bearer check rather than a branch
-    inside it: a health probe carries no token, and when it lived in
-    BearerAuthMiddleware the endpoint simply did not exist unless MCP_AUTH_TOKEN
-    happened to be set — so deploy.sh, which polls it, reported a healthy server
-    as a failed deployment.
+    Its own layer *outside* the bearer check: a health probe carries no token,
+    and deploy.sh and the image's HEALTHCHECK both poll it.
     """
 
     def __init__(self, app):
@@ -1287,9 +1284,7 @@ def _bearer_check_or_refuse(token: str, allow_unauthenticated: bool) -> bool:
 
     A refusal rather than a warning: in HTTP mode reaching the endpoint means
     reaching the whole Trilium instance, so an unauthenticated endpoint is a
-    decision, not a default one can slip into by leaving a variable unset. The
-    log line it used to emit scrolled past in the container output and the
-    server kept serving.
+    decision, not a default one can slip into by leaving a variable unset.
 
     Returns True when the bearer check will be installed, False when the
     operator opted out explicitly. Raises OSError when neither is the case.
@@ -1303,8 +1298,7 @@ def _bearer_check_or_refuse(token: str, allow_unauthenticated: bool) -> bool:
             "covers every note, and this is the only check in front of it.\n"
             "Set MCP_AUTH_TOKEN to a random secret (openssl rand -hex 32), or set\n"
             "MCP_ALLOW_UNAUTHENTICATED=1 if something in front of the server does the\n"
-            "authentication and you accept that. Neither replaces a network boundary —\n"
-            "see the Security model section of the README."
+            "authentication and you accept that. Neither replaces a network boundary."
         )
     logger.warning(
         "MCP_ALLOW_UNAUTHENTICATED is set — the endpoint is served without a bearer "
@@ -1320,11 +1314,9 @@ def _run_http() -> None:
     # Before anything binds a port: an unauthenticated endpoint must not come up
     # far enough to answer a single request.
     guarded = _bearer_check_or_refuse(MCP_AUTH_TOKEN, MCP_ALLOW_UNAUTHENTICATED)
-    # Passed per call rather than set on a settings object: the SDK dropped
-    # `mcp.settings`, so the path and the host check are arguments now. Leaving
-    # transport_security None keeps the SDK's localhost-only default, which is
-    # what makes a proxied request fail closed with 421 until its hostname is
-    # listed — see MCP_ALLOWED_HOSTS in the README.
+    # Leaving transport_security None keeps the SDK's localhost-only default,
+    # which is what makes a proxied request fail closed with 421 until its
+    # hostname is listed — see MCP_ALLOWED_HOSTS in the README.
     transport_security = None
     if MCP_ALLOWED_HOSTS or MCP_ALLOWED_ORIGINS:
         transport_security = TransportSecuritySettings(
