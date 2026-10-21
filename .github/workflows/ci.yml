@@ -40,10 +40,13 @@ jobs:
         run: |
           # A regenerated lockfile that was not committed is the failure mode
           # this catches — the image would then install something the repo does
-          # not describe.
+          # not describe. The header comment is left out of the comparison: it
+          # only echoes the command, and pip-tools renders that differently
+          # across pip releases (7.6.1 on pip 26.2 adds a --no-index nobody
+          # passed). Pins, hashes and the indented `# via` lines still count.
           cp requirements.txt requirements.txt.committed
           pip-compile --generate-hashes --strip-extras --quiet requirements.in
-          diff -u requirements.txt.committed requirements.txt \
+          diff -u <(grep -v '^#' requirements.txt.committed) <(grep -v '^#' requirements.txt) \
             || { echo '::error::requirements.txt is stale — re-run pip-compile and commit it'; exit 1; }
 
   audit:
