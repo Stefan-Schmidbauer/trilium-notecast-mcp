@@ -5,7 +5,7 @@
 # release nobody chose.
 
 pytest==9.1.1
-ruff==0.16.9
+ruff==0.17.3
 
 # Mocks ETAPI at the HTTP layer, so the URL a tool requests is what is asserted.
 respx==0.23.1
