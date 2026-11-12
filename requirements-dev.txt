@@ -4,7 +4,7 @@
 # the deployed server. Exact versions still, so CI does not start failing on a
 # release nobody chose.
 
-pytest==9.1.1
+pytest==9.2.0
 ruff==0.17.3
 
 # Mocks ETAPI at the HTTP layer, so the URL a tool requests is what is asserted.
